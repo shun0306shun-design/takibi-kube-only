@@ -368,12 +368,12 @@
   const flames = [], sparks = [], smokes = [], flying = [], landed = [];
   const rockets = [], fw = [], shoots = [];
   const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
-    slowT: 0, shake: 0, bright: 0, freeze: false };
+    slowT: 0, shake: 0, bright: 0, freeze: false, base: 'fire', hold: false, omen: null };
   let flameAcc = 0, sparkAcc = 0, smokeAcc = 0, ambT = 0, lastThrow = 0, lastRoll = 0, crackT = 0;
 
-  const palName = () => {
-    if (!fx.flame || fx.flameT <= 0) return 'fire';
-    return fx.flame === 'rainbow' ? RAINBOW[Math.floor(T * 2.3) % RAINBOW.length] : fx.flame;
+  const palName = () => { // レアの色炎 ＞ ふだんの色（業火タイムの金、または自分で選んだ色）
+    const n = fx.flame && fx.flameT > 0 ? fx.flame : fx.base;
+    return n === 'rainbow' ? RAINBOW[Math.floor(T * 2.3) % RAINBOW.length] : n;
   };
 
   // 薪による一時的な色味。レアの色炎があるときはそちらを優先し、ふだんの炎にだけ混ぜる
@@ -451,7 +451,9 @@
     }
     return null;
   }
-  function rollRare(on) { const id = pickRare(on); if (id) trigger(id, true); }
+  // 予兆は「もう決まった結果」を先に見せるだけ。抽選そのものには関わらない
+  let omenFn = null;
+  function rollRare(on) { const id = pickRare(on); if (omenFn && omenFn(id)) return; if (id) trigger(id, true); }
   function recordRare(id, when, quiet) {
     const now = when || Date.now();
     const c = S.col[id] || (S.col[id] = { n: 0, first: now });
@@ -488,7 +490,10 @@
   function announce(r, sub, cls) {
     toast(starStr(r), r.name, sub, 5200, cls);
     Sound.chime(Math.min(3, Math.round(r.star)));
-    haptic(r.star >= 3 ? [40, 60, 40, 60, 90] : [30, 50, 30]);
+    // ★の数で出方を変える: ★ トーストのみ ／ ★★ 画面がふわっと明るく ／ ★★★ 一瞬のスローと揺れ、決めの音
+    if (r.star >= 2) fx.bright = Math.max(fx.bright, 0.2);
+    if (r.star >= 3) { fx.slowT = 0.8; fx.shake = 4; Sound.tone(196, 98, 0.9, 0.2); Sound.tone(1568, 1568, 1.4, 0.06, 0.1); }
+    haptic(r.star >= 3 ? [40, 60, 40, 60, 120] : r.star >= 2 ? [30, 50, 30] : 20);
   }
 
   function launchFireworks(n, big) {
@@ -577,7 +582,7 @@
       addSpark(cx + rnd(-1, 1) * (12 + 30 * I) * U, baseY - rnd(6, 10 + flameH * 0.55), rnd(-18, 18) * U, -rnd(50, 130) * U * (0.5 + I),
         rnd(0.9, 2.5), rnd(1, 2.2) * U, mix(pal.core, pal.edge, rnd(0.2, 0.8)), -10);
     }
-    for (let i = sparks.length - 1; i >= 0; i--) {
+    for (let i = sparks.length - 1; i >= 0 && !fx.hold; i--) { // hold = 予兆で火の粉が一瞬止まる
       const p = sparks[i];
       p.age += dt;
       if (p.age >= p.life) { sparks[i] = sparks[sparks.length - 1]; sparks.pop(); continue; }
@@ -1776,6 +1781,167 @@
   TAP_GUARD.unshift(() => { if (!photo.on) return false; photoShoot(); return true; });
   addChip('chipPhoto', '写真', photoEnter);
   FX.photo = photoEnter;
+
+  // ================= 気持ちよさ（コンボ・業火タイム・予兆・金の薪・節目） =================
+  // --- くべコンボ: 0.3〜0.8秒のリズムで指でくべ続けると伸びる（長押しの連続くべは数えない） ---
+  def('maxCombo', () => 0);
+  const combo = { n: 0, last: 0, shown: -1 };
+  const elCombo = app.appendChild(el('div')); elCombo.id = 'combo';
+  HOOKS.thrown.push((L, auto) => {
+    if (wfx.preview) return;
+    if (auto) { combo.n = 0; return; }
+    const now = performance.now(), gap = (now - combo.last) / 1000;
+    combo.n = combo.last && gap >= 0.3 && gap <= 0.8 ? combo.n + 1 : 1;
+    combo.last = now;
+    L.combo = combo.n;
+    L.sparks *= 1 + Math.min(1.5, combo.n / 40);
+    if (combo.n > S.maxCombo) S.maxCombo = combo.n;
+  });
+  function comboBurst(n) {
+    emberBurst(cx, baseY - 20 * U, Math.min(90, 30 + n * 0.6), 1.4); flare = 0.9;
+    Sound.chime(n >= 50 ? 3 : 2); haptic(n >= 100 ? [30, 40, 30, 40, 80] : 25);
+    if (n >= 100) { fx.shake = 3; fx.bright = Math.max(fx.bright, 0.18); }
+  }
+  HOOKS.land.push((L) => {
+    if (!(L.combo >= 2)) return;
+    const f = 330 * Math.pow(2, Math.min(L.combo, 60) / 24); // コンボが伸びるほど音程が上がる
+    Sound.tone(f, f, 0.14, 0.08, 0, 'triangle');
+    if ([10, 30, 50, 100].includes(L.combo)) comboBurst(L.combo);
+  });
+  HOOKS.update.push(() => {
+    if (combo.n && performance.now() - combo.last > 850) combo.n = 0; // リズムが途切れた
+    const show = combo.n >= 3 ? combo.n : 0;
+    if (show === combo.shown) return;
+    combo.shown = show;
+    if (show) { elCombo.textContent = `${show} combo`; elCombo.classList.remove('bump'); void elCombo.offsetWidth; elCombo.classList.add('on', 'bump'); }
+    else elCombo.classList.remove('on');
+  });
+  STATS.push((stat) => stat('最高コンボ', `${S.maxCombo}`));
+  FX.combo = () => { combo.n = 100; combo.last = performance.now(); comboBurst(100); };
+
+  // --- 業火タイム: 「天を焦がす炎」を保つと金色のゲージがたまり、満タンで15秒間のフィーバー ---
+  PAL.gold = { core: [255, 250, 214], edge: [255, 186, 40], glow: [255, 200, 70] };
+  def('flameColor', () => 'fire');
+  const fever = { gauge: 0, t: 0, ring: -1 };
+  const elFever = $('fever');
+  function feverStart() {
+    fever.t = 15; fever.gauge = 0; flare = 0.9; fx.bright = Math.max(fx.bright, 0.2);
+    btnFeed.classList.add('fever');
+    toast('', '業火タイム', '15秒のあいだ、レアな出来事が3倍起きやすい', 3200);
+    for (let i = 0; i < 5; i++) Sound.tone(392 * Math.pow(2, i / 5), 392 * Math.pow(2, i / 5), 0.5, 0.08, i * 0.07, 'triangle');
+    haptic([30, 30, 30, 30, 60]);
+  }
+  function feverEnd() { // 火の粉が空へ一斉に舞い上がって締めくくる
+    fever.t = 0; btnFeed.classList.remove('fever');
+    for (let i = 0; i < 90; i++) addSpark(cx + rnd(-50, 50) * U, baseY - rnd(0, flameH), rnd(-40, 40) * U, -rnd(160, 420) * U, rnd(1.6, 3.4), rnd(1.2, 2.6) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), -30);
+    Sound.tone(880, 220, 1.2, 0.07); Sound.crackle(2);
+  }
+  RARE_MUL.push(() => (fever.t > 0 ? 3 : 1));
+  HOOKS.update.push((dt) => {
+    if (fever.t > 0) {
+      fever.t -= dt;
+      if (Math.random() < dt * 14) addSpark(cx + rnd(-1, 1) * 40 * U, baseY - rnd(6, flameH * 0.6), rnd(-24, 24) * U, -rnd(70, 190) * U, rnd(0.9, 2.4), rnd(1, 2.4) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), -12); // 火の粉が倍に
+      if (Math.random() < dt * 9) Sound.crackle(1.5);                                                           // 音もにぎやかに
+      if (Math.random() < dt * 1.6) { const f = pick([1047, 1319, 1568, 2093]); Sound.tone(f, f, 0.4, 0.03); }
+      if (fever.t <= 0) feverEnd();
+    } else if (!fx.freeze) {
+      fever.gauge = S.fuel >= 90 ? Math.min(1, fever.gauge + dt / 40) : Math.max(0, fever.gauge - dt / 90);
+      if (fever.gauge >= 1) feverStart();
+    }
+    fx.base = fever.t > 0 ? 'gold' : S.flameColor;
+    const ring = Math.round((fever.t > 0 ? fever.t / 15 : fever.gauge) * 200);
+    if (ring !== fever.ring) { fever.ring = ring; elFever.style.strokeDashoffset = (309.76 * (1 - ring / 200)).toFixed(1); }
+  });
+  FX.fever = feverStart;
+
+  // --- 予兆: レアが出る直前に、まれに色つきの光で知らせる。白 ＜ 青 ＜ 赤 ＜ 金（★2以上確定）＜ 虹（★3確定） ---
+  const OMEN = { white: [255, 255, 255], blue: [90, 160, 255], red: [255, 70, 60], gold: [255, 205, 80], rainbow: null };
+  function omenShow(color, id) {
+    fx.omen = { color, id, age: 0 };
+    const base = { white: 587, blue: 698, red: 784, gold: 1047, rainbow: 1319 }[color];
+    Sound.tone(base, base, 0.9, 0.06); if (color === 'gold' || color === 'rainbow') Sound.tone(base * 1.5, base * 1.5, 0.9, 0.05, 0.12);
+    haptic(12);
+  }
+  omenFn = (id) => {
+    const r = id && RMAP[id];
+    if (r && r.kind === 'hidden') return false; // 隠し要素は前触れなしで起きる
+    const x = Math.random(), y = Math.random();
+    if (!r) { // ハズレ予兆（何も起きない）。金と虹は出さない
+      if (x < 0.017) omenShow(x < 0.012 ? 'white' : x < 0.0158 ? 'blue' : 'red', null);
+      return false;
+    }
+    if (x > 0.5) return false; // 半分は予兆なしで、いきなり起きる
+    omenShow(r.star >= 3 ? (y < 0.2 ? 'red' : y < 0.55 ? 'gold' : 'rainbow') : r.star >= 2 ? (y < 0.25 ? 'blue' : y < 0.6 ? 'red' : 'gold') : (y < 0.45 ? 'white' : y < 0.85 ? 'blue' : 'red'), id);
+    return true; // 結果はもう決まっている。1.5秒後に起こす
+  };
+  HOOKS.update.push((dt, real) => {
+    const o = fx.omen;
+    fx.hold = !!o && o.age < 0.32; // 火の粉が一瞬止まる
+    if (!o) return;
+    o.age += real;
+    if (o.id && o.age >= 1.5) { const id = o.id; o.id = null; trigger(id, true); }
+    if (o.age >= 2) fx.omen = null;
+  });
+  HOOKS.front.push(() => {
+    const o = fx.omen;
+    if (!o) return;
+    const c = OMEN[o.color] || PAL[RAINBOW[Math.floor(o.age * 9) % RAINBOW.length]].edge, a = Math.sin(Math.min(1, o.age / 2) * Math.PI);
+    g.globalCompositeOperation = 'lighter';
+    blob(c, cx, baseY + 4 * U, (50 + 26 * Math.sin(o.age * 9)) * U, 0.75 * a);
+    blob(c, cx + 38 * U, baseY + 11 * U, 13 * U, a); blob([255, 255, 255], cx + 38 * U, baseY + 11 * U, 6 * U, a); // 薪の切り口が光る
+    g.globalAlpha = 0.8 * a * (1 - o.age / 2); g.strokeStyle = rgb(c); g.lineWidth = 2.4 * U;
+    g.beginPath(); g.ellipse(cx, baseY + 8 * U, (40 + o.age * 90) * U, (11 + o.age * 25) * U, 0, 0, TAU); g.stroke();
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  });
+  for (const k of Object.keys(OMEN)) FX['omen-' + k] = () => omenShow(k, null);
+
+  // --- 金の薪: くべるたびに 1/500 で、次の一本が金色に光る ---
+  addRare({ id: 'kinmaki', name: '金の薪', star: 2, glyph: '金', orb: ['#fffbe0', '#ffc83c', '#a86a08'], on: 'none', kind: 'gold', p: 0,
+    desc: '手元の薪が金色に光っていた。くべた瞬間、火は天まで届いた。', hint: '薪をくべつづけていると、ごくまれに次の一本が金色に…。' });
+  TRIG.kinmaki = () => {};
+  const gold = { next: false, preview: false };
+  function goldArm(preview) {
+    gold.next = true; gold.preview = !!preview; btnFeed.classList.add('gold');
+    toast('', '金の薪', '次の一本が、金色に光っている', 2800);
+    Sound.tone(1568, 1568, 0.6, 0.06); Sound.tone(2093, 2093, 0.6, 0.05, 0.1);
+  }
+  HOOKS.thrown.push((L) => {
+    if (wfx.preview) return;
+    if (gold.next) { gold.next = false; btnFeed.classList.remove('gold'); L.gold = gold.preview ? 'preview' : true; L.col = [255, 208, 70]; L.len = 60; L.th = 14; }
+    else if (Math.random() < 1 / 500) goldArm(false);
+  });
+  HOOKS.land.push((L) => {
+    if (!L.gold) return;
+    S.fuel = 100; flare = 0.9; fx.bright = Math.max(fx.bright, 0.3); // 火力が一気に満タン
+    for (let i = 0; i < 80; i++) { const a = rnd(0, TAU), v = rnd(60, 300) * U; addSpark(cx, baseY - 20 * U, Math.cos(a) * v, Math.sin(a) * v - 120 * U, rnd(1, 2.6), rnd(1.4, 3) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), 70); }
+    for (const [f, w] of [[1318.5, 0], [1975.5, 0.02], [2637, 0.04], [3951, 0.06]]) Sound.tone(f, f, 2.6, 0.07, w); // 澄んだ鐘の音
+    trigger('kinmaki', L.gold !== 'preview');
+  });
+  HOOKS.update.push((dt) => { for (const L of flying) if (L.gold && Math.random() < dt * 40) addSpark(L.x, L.y, rnd(-20, 20) * U, rnd(-10, 30) * U, 0.5, 1.6 * U, [255, 226, 130], 40); });
+  FX.gold = () => goldArm(true);
+
+  // --- 節目: 100・1,000・10,000本と、777 や 1,111 のようなゾロ目 ---
+  const isMilestone = (n) => [100, 1000, 10000, 100000].includes(n) || (n >= 111 && /^(\d)\1+$/.test(String(n)));
+  function milestone(n) {
+    elCount.classList.remove('pop'); void elCount.offsetWidth; elCount.classList.add('pop');
+    const busy = fx.fwBusy; launchFireworks(3, false); fx.fwBusy = busy; // お祝いの花火は、レアの花火の抽選を邪魔しない
+    setTimeout(() => toast('', `くべた薪 ${n.toLocaleString('ja-JP')}本`, TITLES.some((t) => t[0] === n) ? `称号「${titleOf(n)}」` : 'ゾロ目の一本', 3800), 60);
+    Sound.chime(3); haptic([30, 40, 30]);
+  }
+  HOOKS.thrown.push(() => { if (!wfx.preview && isMilestone(S.totalLogs)) milestone(S.totalLogs); });
+  FX.milestone = () => milestone(777);
+
+  // --- 図鑑が埋まるたびに図鑑ボタンが光る。全部（？？？のひとつを除く）埋めると炎の色を選べる ---
+  const bookDone = () => RARES.every((r) => r.id === 'gameover' || S.col[r.id]);
+  HOOKS.found.push(() => {
+    const b = $('btnBook'); b.classList.remove('glow'); void b.offsetWidth; b.classList.add('glow');
+    if (bookDone()) setTimeout(() => showNote('図鑑がそろいました', ['すべての出来事に出会いました。', '設定から、炎の色を自由に選べるようになりました。'], { ms: 16000 }), 6000);
+  });
+  SET_ROWS.push(({ pane, row, seg, head }) => {
+    head('炎の色');
+    if (!bookDone()) { pane.appendChild(el('p', 'note', '図鑑の「出来事」をすべて埋めると（最後の ？？？ を除く）、炎の色を自由に選べるようになります。')); return; }
+    row('ふだんの炎', seg(S.flameColor, [['fire', '橙'], ['blue', '青'], ['green', '翠'], ['purple', '紫'], ['pink', '桜'], ['gold', '金'], ['rainbow', '虹']], (v) => { S.flameColor = v; save(); })).classList.add('stack');
+  });
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
