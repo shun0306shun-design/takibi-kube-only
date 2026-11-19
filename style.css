@@ -327,6 +327,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .howto summary { height: 44px; line-height: 44px; font-size: 14px; letter-spacing: .14em; color: var(--ink); }
 .howto p { margin: 0 0 8px; }
 
+#emberDots { margin-top: 3px; min-height: 10px; font-size: 8px; letter-spacing: .5em; margin-right: -.5em; color: #ff9a52; text-shadow: 0 0 6px rgba(255, 110, 30, .8); }
+#emberDots:empty { display: none; }
+
 /* ---- 横向きは非対応 ---- */
 #rotate {
   display: none; position: absolute; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; place-items: center;

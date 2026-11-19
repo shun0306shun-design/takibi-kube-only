@@ -120,10 +120,13 @@
 
   // 燃焼: df/dt = -(A + B f)。離れていた時間ぶんも同じ式で減らす（熾火は消えない）
   const BURN_A = 0.35, BURN_B = 0.01, LOG_FUEL = 9;
+  let awayK = 1; // 離れたときの熾で決まる、火持ちの倍率（熾が多いほど、留守の間も薪がゆっくり減る）
   function decayAway(sec) {
+    awayK = 1 - 0.35 * clamp((S.ember || 0) / 100, 0, 1);
     if (S.fuel <= 0 || sec <= 0) return;
-    S.fuel = Math.max(0, (S.fuel + BURN_A / BURN_B) * Math.exp(-BURN_B * sec) - BURN_A / BURN_B);
+    S.fuel = Math.max(0, (S.fuel + BURN_A / BURN_B) * Math.exp(-BURN_B * sec * awayK) - BURN_A / BURN_B);
   }
+  const burnTimeAway = (sec, f0) => (f0 < 5 ? 0 : Math.min(sec, Math.log((f0 + BURN_A / BURN_B) / (5 + BURN_A / BURN_B)) / BURN_B / awayK)); // 種火以上で燃えていた時間
   const awaySec = span(S.lastSeen, Date.now()), awayFuel0 = S.fuel;
   decayAway(awaySec);
 
@@ -1454,11 +1457,13 @@
   }
   const chipRoast = addChip('chipRoast', 'あぶる', roastMenu, () => opened('roast') && (roast.can || ROAST_ALSO.some((fn) => fn())));
   CHIP_OFF.push(() => roast.on);
-  BOOK_PAGES.push({ id: 'roast', label: 'あぶり', show: () => opened('roast'), render: (pane) => cardPage(pane, 'roast', 'あぶり', Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
+  const ROAST_CARDS = [];
+  const roastCards = () => Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
     id: id + '-' + res, name: RESULTS[res][0] + ROASTS[id].name, glyph: ROASTS[id].glyph, css: orbOf(roastColor(id, { raw: 0.2, good: 0.75, perfect: 0.86, burnt: 1.2 }[res])),
     rec: S.roast[id + '-' + res], desc: { raw: 'まだ早かった。中は冷たい。', good: 'いい焼き色。ふつうにおいしい。', perfect: 'これ以上ない焼き加減。', burnt: '炭になった。これも思い出。' }[res],
     hint: '火であぶり、引き上げるタイミングで仕上がりが変わる。',
-  }))), '回') });
+  })));
+  BOOK_PAGES.push({ id: 'roast', label: 'あぶり', show: () => opened('roast'), render: (pane) => cardPage(pane, 'roast', 'あぶり', roastCards().concat(...ROAST_CARDS.map((fn) => fn())), '回') });
   for (const id of Object.keys(ROASTS)) FX['roast-' + id] = () => roastStart(id, true);
 
   // ================= 訪問者 =================
@@ -1700,7 +1705,7 @@
   function awayReport(sec, f0) {
     if (sec < 180 || S.totalLogs === 0 || hid.quietBoot) return;
     const k = BURN_A / BURN_B;
-    const burnT = f0 < 5 ? 0 : Math.min(sec, Math.log((f0 + k) / (5 + k)) / BURN_B); // 種火以上で燃えていた時間
+    const burnT = burnTimeAway(sec, f0);
     const lines = [];
     if (f0 < 5) lines.push('火は熾火のまま、静かに待っていました。');
     else if (S.fuel >= 5) lines.push(`${fmtDur(sec)}のあいだ、火は燃えつづけていました。`);
@@ -1717,6 +1722,7 @@
     const when = Date.now() - sec * 500;
     for (const v of came) recordRare(v.id, when, true);
     if (came.length) lines.push(`${came.map((v) => v.name).join('と')}が、火にあたっていったようです。`);
+    for (const fn of AWAY_LINES) { const l = fn(); if (l) lines.push(l); }
     addLogText('留守のあいだに：' + lines.join(''));
     save();
     showNote('留守のあいだに', lines, { ms: 14000 });
@@ -2186,7 +2192,7 @@
     sound: V.bool, vib: V.bool, sky: V.oneOf(['auto', 'night', 'day']), wx: V.oneOf(['auto'].concat(Object.keys(WX_NAME))),
     mix: V.obj(Object.fromEntries(MIX.map(([id]) => [id, V.obj({ on: V.bool, vol: V.num(0, 1) })]))),
   };
-  const roastKeys = () => Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((r) => id + '-' + r));
+  const roastKeys = () => Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((r) => id + '-' + r)).concat(Object.keys(BURY).flatMap((id) => Object.keys(BRES).map((r) => id + '-' + r)));
   function sanitize(src) {
     const out = fresh();
     for (const k of Object.keys(CHECK)) { const c = CHECK[k](src[k]); if (c !== undefined) out[k] = c; }
@@ -2454,6 +2460,107 @@
   FX['open-all'] = () => { for (const [k] of OPENS) S.open[k] = true; syncChips(); };
   FX['open-none'] = () => { for (const [k] of OPENS) S.open[k] = false; syncChips(); };
 
+  // ================= 熾（おき）と、うめて焼く =================
+  // 熾: ほどよい火を保つとゆっくりたまる2つ目の量。火持ちがよくなり、たまると「うめて焼く」ができる
+  const EMBER_UP = 100 / 480, EMBER_DOWN = 100 / 21600; // 焚き火〜大きな焚き火で約8分で満ちる ／ 熾火の間、約6時間かけて0へ
+  def('ember', () => 0);
+  def('bury', () => null);
+  fx.emberMul = 1; // 組み方による、たまりやすさ
+  const BURY = {
+    kuri:  { name: '焼き栗',       glyph: '栗', min: 8,  col: [150, 92, 50] },
+    ringo: { name: '焼きりんご',   glyph: '林', min: 12, col: [206, 70, 56] },
+    hoil:  { name: 'ホイル焼き芋', glyph: '芋', min: 20, col: [196, 200, 208] },
+  };
+  const BRES = {
+    hard: ['まだ硬い', 'まだ早かった。もう少し、熾にまかせればよかった。', 0.35],
+    hoku: ['ほくほくの', '湯気が立つ。じゅうぶんおいしい。', 0],
+    best: ['最高の', '熾がゆっくり仕上げた、これ以上ない焼き上がり。', -0.25],
+    sumi: ['炭になった', '忘れていた。これも思い出。', 0.8],
+  };
+  CHECK.ember = V.num(0, 100);
+  CHECK.bury = (v) => (v === null ? null : V.obj({ item: V.oneOf(Object.keys(BURY)), at: V.time, heat: V.num(0, 1e7) })(v));
+  const buryRate = (e) => (e >= 20 ? 0.4 + 0.6 * (e - 20) / 80 : 0); // 熾が20以上の間だけ進む。量で速さが変わる（0.4〜1.0倍）
+  const buryRatio = () => (S.bury ? S.bury.heat / (BURY[S.bury.item].min * 60) : 0);
+  const buryResult = (r) => (r < 0.7 ? 'hard' : r < 1 ? 'hoku' : r <= 1.6 ? 'best' : 'sumi'); // 最高の幅を広く取る（時計を見張らなくてよい）
+  const buryReady = () => { const r = buryRatio(); return !!S.bury && r >= 1 && r <= 1.6; };
+  HOOKS.update.push((dt) => {
+    if (fx.freeze) return; // 隠し要素の演出中は増減させない
+    const f = S.fuel;
+    if (f >= 20) S.ember = Math.min(100, S.ember + dt * EMBER_UP * (f >= 40 && f < 90 ? 1 : 0.5) * fx.emberMul); // 強すぎる火は灰にしてしまう
+    else if (f < 5) S.ember = Math.max(0, S.ember - dt * EMBER_DOWN);
+    if (S.bury) S.bury.heat += dt * buryRate(S.ember);
+  });
+  // 離れていた間: 熾は増えない。火が熾火になってからのぶんだけ減らす。うめたものは、その間の熾で進む（くり返しは最大300回）
+  function emberAway(sec, f0) {
+    sec = clamp(sec, 0, 30 * 86400); // 時計がずれていても、負の時間や極端に長い時間は使わない
+    const burnT = burnTimeAway(sec, f0), rest = Math.max(0, sec - burnT);
+    if (S.bury) S.bury.heat += burnT * buryRate(S.ember);
+    const n = Math.min(300, Math.ceil(rest / 60)), step = n ? rest / n : 0;
+    for (let i = 0; i < n; i++) {
+      S.ember = Math.max(0, S.ember - EMBER_DOWN * step);
+      if (S.bury) S.bury.heat += step * buryRate(S.ember);
+    }
+  }
+  HOOKS.boot.unshift(() => emberAway(awaySec, awayFuel0));
+  HOOKS.back.unshift(emberAway);
+  BURN_MUL.push(() => 1 - 0.35 * S.ember / 100);                                                   // 火持ち: 最大35%ゆっくり
+  HOOKS.land.push((L) => { if (L.from < 5 && S.ember >= 30) S.fuel = Math.min(100, S.fuel + 6); }); // 火つき: 熾火からの最初の1本
+  // 見た目: 火元の赤い光が強く広くなり、小さな熾の粒が明滅する（粒は最大12個・位置は固定）
+  const SPECKS = (() => { const R = seeded(31), out = []; for (let i = 0; i < 12; i++) { const a = R() * TAU, d = Math.sqrt(R()); out.push({ x: Math.cos(a) * d * 52, y: Math.sin(a) * d * 12, sp: 1.5 + R() * 3, ph: R() * TAU }); } return out; })();
+  const steam = [];
+  HOOKS.ground.push(() => {
+    const e = S.ember / 100;
+    if (e > 0.02) {
+      g.globalCompositeOperation = 'lighter';
+      g.save(); g.translate(cx, baseY + 10 * U); g.scale(1, 0.32);
+      blob([255, 70, 20], 0, 0, (64 + 60 * e) * U, (0.08 + 0.3 * e) * (0.85 + 0.15 * Math.sin(T * 1.7)));
+      g.restore();
+      const n = Math.ceil(12 * e);
+      for (let i = 0; i < n; i++) { const s = SPECKS[i]; blob([255, 150, 50], cx + s.x * U, baseY + 10 * U + s.y * U, 3.2 * U, e * (0.45 + 0.55 * Math.sin(T * s.sp + s.ph))); }
+      g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+    }
+    if (S.bury) { g.globalAlpha = 0.85; g.fillStyle = '#2a211c'; g.beginPath(); g.ellipse(cx - 34 * U, baseY + 20 * U, 13 * U, 4.6 * U, 0, 0, TAU); g.fill(); g.globalAlpha = 1; } // うめた場所の小さな盛り上がり
+  });
+  HOOKS.front.push(() => { for (const p of steam) { const k = p.age / p.life; blob([236, 236, 240], p.x, p.y, (5 + 9 * k) * U, Math.sin(k * Math.PI) * 0.16); } });
+  HOOKS.update.push((dt) => {
+    if (buryReady() && steam.length < 3 && Math.random() < dt * 1.1) steam.push({ x: cx - 34 * U + rnd(-4, 4) * U, y: baseY + 16 * U, age: 0, life: rnd(1.8, 2.8) }); // 食べごろの淡い湯気
+    for (let i = steam.length - 1; i >= 0; i--) { const p = steam[i]; p.age += dt; p.y -= 14 * U * dt; p.x += Math.sin(p.age * 2 + i) * 4 * U * dt; if (p.age >= p.life) steam.splice(i, 1); }
+  });
+  const elDots = $('stage').insertAdjacentElement('afterend', el('div')); elDots.id = 'emberDots';
+  let dotsNow = null, hotNow = null;
+  HOOKS.sec.push(() => {
+    const n = S.ember >= 10 && opened('ember') ? clamp(Math.ceil(S.ember / 20), 1, 5) : 0;
+    if (n !== dotsNow) { dotsNow = n; elDots.textContent = n ? '●'.repeat(n) + '○'.repeat(5 - n) : ''; }
+    const hot = buryReady();
+    if (hot !== hotNow) { hotNow = hot; chipRoast.classList.toggle('hot', hot); } // 食べごろに入ると、あぶるチップがほんのり光る
+  });
+  function buryStart(id) {
+    if (S.bury || S.ember < 40) return;
+    S.bury = { item: id, at: now(), heat: 0 }; save();
+    toast('', `${BURY[id].name}をうめました`, '熾にまかせて、気が向いたら ほりだします', 3400);
+  }
+  function buryDig() {
+    if (!S.bury) return;
+    const it = BURY[S.bury.item], res = buryResult(buryRatio()), key = S.bury.item + '-' + res;
+    const rec = S.roast[key] || (S.roast[key] = { n: 0, first: Date.now() });
+    rec.n++; if (rec.n === 1) { S.unseen = true; syncButtons(); }
+    S.bury = null; steam.length = 0; save();
+    toast('', BRES[res][0] + it.name, rec.n === 1 ? 'はじめて！ 図鑑の「あぶり」に記録' : `${rec.n}回目`, 3800);
+    if (res === 'best') { feel.chime(2); haptic([20, 40, 20]); } else Sound.tone(res === 'sumi' ? 180 : 620, res === 'sumi' ? 80 : 760, 0.2, 0.09);
+  }
+  ROAST_ALSO.push(() => !!S.bury || S.ember >= 40);
+  ROAST_MENU.push((items) => {
+    if (S.bury) items.push(['ほりだす', buryDig, 'chipDig']);
+    else if (S.ember >= 40) items.push(['うめる', () => openChipMenu(Object.keys(BURY).map((id) => [BURY[id].name, () => buryStart(id), 'chipB-' + id]).concat([['やめる', () => {}]])), 'chipBury']);
+  });
+  ROAST_CARDS.push(() => Object.keys(BURY).flatMap((id) => Object.keys(BRES).map((res) => ({
+    id: id + '-' + res, name: BRES[res][0] + BURY[id].name, glyph: BURY[id].glyph, css: orbOf(mix(BURY[id].col, res === 'sumi' ? [30, 26, 24] : [255, 220, 150], Math.abs(BRES[res][2]))),
+    rec: S.roast[id + '-' + res], desc: BRES[res][1], hint: '熾にうめて、ほりだすまでの時間で仕上がりが変わる。',
+  }))));
+  AWAY_LINES.push(() => (buryReady() ? `うめた${BURY[S.bury.item].name}が、いい香りをさせています。` : null));
+  HOWTO.push(['ember', '熾：「焚き火」くらいの火を保つと、ゆっくりたまります（●の数）。火持ちがよくなり、たまると あぶる から「うめる」が選べます。うめたものは時間をかけて焼け、いつ ほりだしても失敗にはなりません。']);
+  for (const res of Object.keys(BRES)) FX['bury-' + res] = () => toast('', BRES[res][0] + BURY.kuri.name, 'プレビュー（記録されません）', 3000);
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2494,8 +2601,8 @@
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
-      skip: (min) => { const sec = min * 60, f0 = S.fuel; clockSkew += sec * 1000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
+    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, pick: pickRare,
+      skip: (min) => { const sec = clamp(min * 60, 0, 30 * 86400), f0 = S.fuel; clockSkew += min * 60000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
       counts: () => ({ fps: Math.round(perf.fps), quality: Q(), wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
