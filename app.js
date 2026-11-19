@@ -1873,6 +1873,7 @@
   }
   function photoShoot() {
     photo.on = false; app.classList.remove('photo');
+    if (S.prog) { S.prog.photo = 1; dirty = true; }
     const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
     const x = c.getContext('2d'), k = c.width / W, d = new Date(), pad = (n) => String(n).padStart(2, '0');
     x.drawImage(cv, 0, 0);
@@ -2749,6 +2750,163 @@
   TRIG.amanogawa = () => { fx.milkyT = 30; };
   TRIG.tsukigasa = () => { fx.haloT = 30; };
 
+  // ================= 焚き火のしおり（やってみたいこと）と小物 =================
+  // 期限なし・順番なし・日替わりなし。やらなくても何も困らない、ゆるい道しるべ
+  const shioriNew = S.shiori === undefined; // アップデート後の最初の起動か
+  def('shiori', () => ({}));                // できた日時
+  def('props', () => ({}));                 // 小物を片づけているとき false
+  def('prog', () => ({}));                  // 途中経過（秒数など）
+  const PG = () => S.prog;
+  const SHIORI = [
+    ['first',   'はじめの一歩', 'はじめての一本', '薪を1本くべる',                               () => S.totalLogs >= 1],
+    ['takibi',  'はじめの一歩', '焚き火らしく',   '火を「焚き火」まで育てる',                     () => S.peak >= 40],
+    ['woods',   'はじめの一歩', '木のちがい',     '6種類の薪をぜんぶくべる',                     () => WOODS.every((w) => S.wood[w.id])],
+    ['marsh',   'はじめの一歩', 'きつね色',       'マシュマロを「完璧」に焼く',                   () => !!S.roast['marsh-perfect']],
+    ['daynight', 'はじめの一歩', '朝の火、夜の火', '朝と夜、それぞれ1分ずつ火を焚く',             () => PG().day >= 60 && PG().night >= 60],
+    ['photo',   'はじめの一歩', '一枚のこす',     '写真モードで1枚撮る',                         () => !!PG().photo],
+    ['ember',   '火となかよく', '熾をそだてる',   '熾をいっぱいまでためる',                       () => !!PG().emberFull],
+    ['stacks',  '火となかよく', '組みかえる',     '3つの組み方をぜんぶ試す',                     () => STACKS.every((s) => S.stackRec[s.id])],
+    ['bury',    '火となかよく', '待つ楽しみ',     'うめて焼いたものを、最高の焼き上がりで掘り出す', () => Object.keys(BURY).some((id) => S.roast[id + '-best'])],
+    ['rain',    '火となかよく', '雨やどり',       '雨の中で10分、火を絶やさない',                 () => PG().rain >= 600],
+    ['keep',    '火となかよく', '火の番',         '1時間、火を絶やさない',                       () => PG().keep >= 3600],
+    ['gift',    '火となかよく', '置きみやげ',     '訪問者からおみやげをもらう',                   () => Object.keys(S.gifts).length > 0],
+    ['seasons', 'ながいつきあい', '四季の火',     '春夏秋冬すべての季節に火を焚く',               () => Object.keys(SEASON_NAME).every((k) => PG().se && PG().se[k])],
+    ['moon',    'ながいつきあい', '月の夜',       '新月のころと満月のころ、どちらの夜にも火を焚く', () => !!PG().moonNew && !!PG().moonFull],
+    ['wx',      'ながいつきあい', 'どんな空でも', '晴れ・雨・雪・霧すべての天気で火を焚く',       () => Object.keys(WX_NAME).every((k) => PG().wx && PG().wx[k])],
+    ['faces',   'ながいつきあい', '火を囲む顔ぶれ', '5組の訪問者すべてに会う',                   () => VISITORS.every((v) => S.col[v.id])],
+    ['seven',   'ながいつきあい', '七日の火',     '今日の一本を7日つづける',                     () => S.streak.best >= 7],
+    ['scholar', 'ながいつきあい', '物知り',       '図鑑の「出来事」を20種見つける',               () => foundCount() >= 20],
+  ];
+  const PROPS = [[2, 'isu', '丸太のいす'], [4, 'yakan', 'やかん'], [6, 'lantern', 'ランタン'], [9, 'mug', 'マグカップ'], [12, 'tana', '薪棚'], [15, 'tent', '小さなテント']];
+  const flags = (ids) => (v) => { if (!v || typeof v !== 'object') return {}; const o = {}; for (const k of ids) if (v[k] === true) o[k] = true; return o; };
+  CHECK.shiori = V.rec(() => SHIORI.map((s) => s[0]), V.time);
+  CHECK.props = V.rec(() => PROPS.map((p) => p[1]), V.bool);
+  CHECK.prog = (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const n = (x) => V.num(0, 1e7, true)(x) || 0;
+    return { day: n(v.day), night: n(v.night), rain: n(v.rain), keep: n(v.keep), photo: n(v.photo) ? 1 : 0, emberFull: n(v.emberFull) ? 1 : 0, moonNew: n(v.moonNew) ? 1 : 0, moonFull: n(v.moonFull) ? 1 : 0,
+      se: flags(Object.keys(SEASON_NAME))(v.se), wx: flags(Object.keys(WX_NAME))(v.wx) };
+  };
+  { const p = S.prog; for (const k of ['day', 'night', 'rain', 'keep', 'photo', 'emberFull', 'moonNew', 'moonFull']) if (typeof p[k] !== 'number') p[k] = 0; if (!p.se) p.se = {}; if (!p.wx) p.wx = {}; }
+  const stamps = () => SHIORI.filter((s) => S.shiori[s[0]]).length;
+  const propOn = (th, id) => (sp.all || stamps() >= th) && S.props[id] !== false && !sp.none;
+  const sp = { cvN: null, cvD: null, all: false, none: false, x0: 0, y0: 0, w: 0, h: 0, steamK: [], pre: 0 };
+  function shioriCheck(silent) {
+    let got = 0;
+    for (const [id, , title, , ok] of SHIORI) {
+      if (S.shiori[id] || !ok()) continue;
+      const before = stamps();
+      S.shiori[id] = Date.now(); got++;
+      if (silent) continue;
+      quietToast(`しおり：${title}`, 'スタンプをひとつ', 5000);
+      for (const [th, , name] of PROPS) if (before < th && before + 1 >= th) quietToast(`小物「${name}」を置けるようになりました`, 'しおりのページで出し入れできます', 6000);
+      if (before + 1 === SHIORI.length) quietToast('しおりが、ぜんぶうまりました', '称号「焚き火の友」', 6000);
+    }
+    if (got) { save(); paintProps(); }
+    return got;
+  }
+  HOOKS.sec.push(() => {
+    const p = PG(), lit5 = S.fuel >= 5 && !fx.freeze;
+    if (lit5) {
+      if (dayTarget) p.day = Math.min(1e6, p.day + 1); else p.night = Math.min(1e6, p.night + 1);
+      p.keep = Math.min(1e6, p.keep + 1);                                           // 火を絶やさない: 火力5以上が続くこと（ながめる中も数える）
+      const autoWx = S.set.wx === 'auto' && !wxs.force;                             // 天気を固定している間は数えない
+      p.rain = autoWx && wxKind() === 'rain' ? p.rain + 1 : 0;
+      if (autoWx) p.wx[wxKind()] = true;
+      if (!wxs.season) p.se[seasonNow()] = true;
+      if (!dayTarget && moonForce == null) { if (isNewMoon()) p.moonNew = 1; if (isFullMoon()) p.moonFull = 1; }
+    } else { p.keep = 0; p.rain = 0; }
+    if (S.ember >= 99.5) p.emberFull = 1;
+    shioriCheck(false);
+  });
+  HOOKS.back.push((sec) => { const p = PG(); if (S.fuel >= 5) p.keep = Math.min(1e6, p.keep + Math.round(sec)); else { p.keep = 0; p.rain = 0; } }); // 離れている間も燃えつづけていたら、続きとして数える
+  HOOKS.boot.unshift(() => { if (S.fuel < 5) { PG().keep = 0; PG().rain = 0; } if (shioriNew) sp.pre = shioriCheck(true); }); // すでにある記録から判定できるものは、まとめて達成に（トーストなし）
+  NEWS.push(() => (sp.pre ? `しおり（やってみたいこと）が${sp.pre}個、もううまっていました。` : null));
+  STATS.push((stat) => { if (opened('shiori')) stat('しおり', `${stamps()} / ${SHIORI.length}` + (stamps() === SHIORI.length ? '　焚き火の友' : '')); });
+  HOWTO.push(['shiori', 'しおり：図鑑の「しおり」に、やってみたいことが18個あります。期限も順番もありません。うまると、焚き火のまわりに小物が増えます。']);
+
+  // --- 小物: 動かない絵として、朝用と夜用を1度だけ描きためる ---
+  function drawProps(x, day) {
+    const sh = (c) => rgb(mix(c, [14, 13, 28], day ? 0.06 : 0.52));
+    const E2 = (px, py, rx, ry) => { x.beginPath(); x.ellipse(px, py, rx, ry, 0, 0, TAU); x.fill(); };
+    const by = baseY - sp.y0, hz = horizon - sp.y0, mx = cx - sp.x0; // バッファ内の座標
+    x.save(); x.translate(mx, 0); x.scale(U, U); x.translate(0, by / U);
+    if (propOn(15, 'tent')) { // 小さなテント（右奥）
+      const ty = (hz - by) / U + 22;
+      x.fillStyle = sh([172, 146, 92]); x.beginPath(); x.moveTo(96, ty); x.lineTo(122, ty - 36); x.lineTo(150, ty); x.closePath(); x.fill();
+      x.fillStyle = sh([120, 98, 60]); x.beginPath(); x.moveTo(122, ty - 36); x.lineTo(150, ty); x.lineTo(134, ty); x.closePath(); x.fill();
+      x.fillStyle = sh([44, 36, 30]); x.beginPath(); x.moveTo(114, ty); x.lineTo(121, ty - 20); x.lineTo(128, ty); x.closePath(); x.fill();
+    }
+    if (propOn(12, 'tana')) { // 薪棚（左奥）
+      x.fillStyle = sh([74, 54, 38]); x.fillRect(-174, -40, 3, 26); x.fillRect(-140, -40, 3, 26); x.fillRect(-174, -17, 37, 3);
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) { x.fillStyle = sh([150 + ((r * 7 + c * 13) % 3) * 16, 108, 66]); E2(-166 + c * 8.2, -21 - r * 7, 3.9, 3.4); }
+    }
+    if (propOn(6, 'lantern')) { // ランタン
+      x.fillStyle = sh([56, 56, 62]); x.fillRect(-153, -7, 10, 3); x.fillRect(-152, 6, 8, 2.4);
+      x.fillStyle = day ? 'rgba(255,236,190,.75)' : '#ffd98a'; x.fillRect(-151.5, -4, 7, 10);
+      x.strokeStyle = sh([56, 56, 62]); x.lineWidth = 1.2; x.beginPath(); x.arc(-148, -8, 4.2, Math.PI, TAU); x.stroke();
+    }
+    if (propOn(2, 'isu')) { // 丸太のいす
+      x.fillStyle = sh([116, 80, 50]); x.beginPath(); x.moveTo(-152, 24); x.lineTo(-112, 24); x.arcTo(-106, 24, -106, 30.5, 6.5); x.arcTo(-106, 37, -112, 37, 6.5); x.lineTo(-152, 37); x.arcTo(-158, 37, -158, 30.5, 6.5); x.arcTo(-158, 24, -152, 24, 6.5); x.fill();
+      x.fillStyle = sh([206, 166, 112]); E2(-110, 30.5, 3, 5.6);
+    }
+    if (propOn(4, 'yakan')) { // やかん
+      x.fillStyle = sh([58, 58, 64]); E2(-102, 14, 8.4, 6.6); x.fillRect(-106, 6.4, 8, 2.6);
+      x.beginPath(); x.moveTo(-94.5, 13); x.lineTo(-88, 8.5); x.lineTo(-87, 10.4); x.lineTo(-94, 16); x.closePath(); x.fill();
+      x.strokeStyle = sh([58, 58, 64]); x.lineWidth = 1.4; x.beginPath(); x.arc(-102, 8.4, 6.4, Math.PI * 1.08, Math.PI * 1.92); x.stroke();
+    }
+    if (propOn(9, 'mug')) { // マグカップ
+      x.fillStyle = sh([232, 222, 200]); x.fillRect(-103, 30, 6.4, 7); x.strokeStyle = sh([232, 222, 200]); x.lineWidth = 1.2; x.beginPath(); x.arc(-96.2, 33.4, 2.3, -Math.PI / 2, Math.PI / 2); x.stroke();
+    }
+    x.restore();
+  }
+  function paintProps() { // 描き直すのは resize と、内容が変わったときだけ
+    sp.x0 = cx - 185 * U; sp.y0 = horizon - 24 * U; sp.w = 370 * U; sp.h = baseY + 44 * U - sp.y0;
+    for (const day of [false, true]) {
+      const key = day ? 'cvD' : 'cvN';
+      if (!sp[key]) sp[key] = document.createElement('canvas');
+      const c = sp[key], w = Math.max(2, Math.ceil(sp.w * DPR)), h = Math.max(2, Math.ceil(sp.h * DPR));
+      if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+      const x = c.getContext('2d'); x.setTransform(DPR, 0, 0, DPR, 0, 0); x.clearRect(0, 0, sp.w, sp.h);
+      drawProps(x, day);
+    }
+  }
+  HOOKS.resize.push(paintProps);
+  HOOKS.ground.push((day) => {
+    if (!sp.cvN) return;
+    if (day < 1) { g.globalAlpha = 1; g.drawImage(sp.cvN, sp.x0, sp.y0, sp.w, sp.h); }
+    if (day > 0) { g.globalAlpha = day; g.drawImage(sp.cvD, sp.x0, sp.y0, sp.w, sp.h); }
+    g.globalAlpha = 1;
+    if (propOn(6, 'lantern') && day < 0.95) { g.globalCompositeOperation = 'lighter'; blob([255, 196, 104], cx - 148 * U, baseY + 1 * U, 24 * U, 0.5 * (1 - day) * (0.9 + 0.1 * Math.sin(T * 7))); g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; } // 夜のランタンの灯
+  });
+  HOOKS.update.push((dt) => { // やかんの湯気（粒は2個まで）
+    const k = sp.steamK;
+    if (propOn(4, 'yakan') && lit > 0.5 && k.length < 2 && Math.random() < dt * 0.9) k.push({ x: cx - 88 * U, y: baseY + 8 * U, age: 0, life: rnd(1.6, 2.4) });
+    for (let i = k.length - 1; i >= 0; i--) { const p = k[i]; p.age += dt; p.y -= 12 * U * dt; p.x += 3 * U * dt; if (p.age >= p.life) k.splice(i, 1); }
+  });
+  HOOKS.front.push(() => { for (const p of sp.steamK) { const k = p.age / p.life; blob([236, 236, 240], p.x, p.y, (3 + 6 * k) * U, Math.sin(k * Math.PI) * 0.2); } });
+  BOOK_PAGES.push({ id: 'shiori', label: 'しおり', show: () => opened('shiori'), render: (pane) => {
+    const h = el('h2', '', 'しおり'); h.appendChild(el('small', '', `${stamps()} / ${SHIORI.length}`)); pane.appendChild(h);
+    pane.appendChild(el('p', 'note', 'やってみたいこと。期限も順番もありません。'));
+    let chap = '';
+    for (const [id, ch, title, desc] of SHIORI) {
+      if (ch !== chap) { chap = ch; pane.appendChild(el('h3', 'chap', ch)); }
+      const done = S.shiori[id], r = el('div', 'shiori' + (done ? ' done' : ''));
+      r.append(el('i', '', done ? '済' : ''), el('b', '', title), el('span', '', desc + (done ? `（${fmtDay(done)}）` : '')));
+      pane.appendChild(r);
+    }
+    pane.appendChild(el('h3', 'chap', '小物'));
+    for (const [th, id, name] of PROPS) {
+      const have = stamps() >= th, r = el('div', 'row');
+      const ctl = have ? el('button', 'tog' + (S.props[id] !== false ? ' on' : '')) : el('span', 'val', `スタンプ ${th}個で`);
+      if (have) { ctl.setAttribute('role', 'switch'); ctl.setAttribute('aria-checked', String(S.props[id] !== false)); ctl.addEventListener('click', () => { S.props[id] = S.props[id] === false; save(); paintProps(); renderBook(); }); }
+      r.append(el('span', '', name), ctl); pane.appendChild(r);
+    }
+  } });
+  FX.shiori = () => quietToast('しおり：はじめての一本', 'プレビュー（記録されません）', 4000);
+  FX['props-all'] = () => { sp.all = true; sp.none = false; paintProps(); };
+  FX['props-none'] = () => { sp.all = false; sp.none = true; paintProps(); };
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2791,7 +2949,9 @@
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
     window.takibi = { moon: (v) => { moonForce = v == null ? null : clamp(v, 0, 0.9999); moonRefresh(); paintMoon(); return moonName(); }, moonAt: (t) => { const d = (t - Date.UTC(2000, 0, 6, 18, 14)) / 86400000 / SYNODIC; return d - Math.floor(d); }, fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, endVisit: () => { if (fx.visitor) fx.visitor.age = Math.max(fx.visitor.age, fx.visitor.stay + 0.01); }, pick: pickRare,
       skip: (min) => { const sec = clamp(min * 60, 0, 30 * 86400), f0 = S.fuel; clockSkew += min * 60000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
-      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), visitor: fx.visitor ? fx.visitor.kind : null, wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
+      counts: () => ({ fps: Math.round(perf.fps), quality: Q(),
+        canvases: (() => { const cs = [layerN, layerD, fBuf && fBuf.c, sBuf && sBuf.c, moonCv, mw.cv, sp.cvN, sp.cvD].concat(Object.values(wxs.layers)).filter(Boolean); return { n: cs.length, screens: +(cs.reduce((a, c) => a + c.width * c.height, 0) / (cv.width * cv.height)).toFixed(2), added: +([mw.cv, sp.cvN, sp.cvD].filter(Boolean).reduce((a, c) => a + c.width * c.height, 0) / (cv.width * cv.height)).toFixed(2), sprites: spriteCache.size }; })(),
+        extra: steam.length + sp.steamK.length + 12, bytes: JSON.stringify(S).length, visitor: fx.visitor ? fx.visitor.kind : null, wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
 })();
