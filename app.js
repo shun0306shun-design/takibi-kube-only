@@ -78,6 +78,7 @@
   const HOOKS = { update: [], sec: [], sky: [], ground: [], front: [], top: [], thrown: [], land: [], found: [], resize: [], boot: [], back: [] };
   const run = (name, a, b) => { for (const fn of HOOKS[name]) fn(a, b); };
   const TRIG = {}, BUSY = {}, FX = {}, TAP_GUARD = [], BURN_MUL = [], RARE_MUL = [];
+  const opened = (k) => !S.open || S.open[k] !== false; // 少しずつひらく（まだひらいていない機能はボタンを見せない）
   const BOOK_PAGES = [], SET_ROWS = [], SET_TOP = [], STATS = [], REC_ROWS = [], AWAY_LINES = [];
   let secAcc = 0;
   HOOKS.update.push((dt, real) => { secAcc += real; if (secAcc >= 1) { secAcc = Math.min(1, secAcc - 1); run('sec'); } }); // 1秒に1回でよい処理はここに集める
@@ -415,7 +416,8 @@
   const flames = [], sparks = [], smokes = [], flying = [], landed = [];
   const rockets = [], fw = [], shoots = [];
   const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
-    slowT: 0, shake: 0, bright: 0, freeze: false, base: 'fire', hold: false, omen: null };
+    slowT: 0, shake: 0, bright: 0, freeze: false, base: 'fire', hold: false, omen: null,
+    ambGap: 10, steward: false, uncounted: false };
   let flameAcc = 0, sparkAcc = 0, smokeAcc = 0, ambT = 0, lastThrow = 0, lastRoll = 0, crackT = 0;
 
   const palName = () => { // レアの色炎 ＞ ふだんの色（業火タイムの金、または自分で選んだ色）
@@ -447,21 +449,24 @@
     }
   }
 
-  function throwLog(px, auto) { // auto = 長押しによる連続くべ
+  function throwLog(px, auto, stew) { // auto = 長押しによる連続くべ ／ stew = おまかせ火の番がくべた薪（本数・コンボ・抽選などに数えない）
     const now = performance.now();
     if (now - lastThrow < 130 || flying.length >= 10) return;
     lastThrow = now;
-    S.totalLogs++; dirty = true;
+    if (stew) S.watchLogs = (S.watchLogs || 0) + 1; else S.totalLogs++;
+    dirty = true; fx.uncounted = !!stew;
     const L = {
       x0: cx + (px - cx) * 0.6, y0: H - 118, x1: cx + rnd(-16, 16) * U, y1: baseY - rnd(0, 14) * U,
       t: 0, dur: rnd(0.5, 0.62), rot: rnd(-0.6, 0.6), spin: (Math.random() < 0.5 ? -1 : 1) * rnd(3, 7), arc: rnd(90, 140) * U, x: 0, y: 0,
-      fuel: LOG_FUEL, flare: 0.2, sparks: 1, len: 58, col: null,
+      fuel: LOG_FUEL, flare: 0.2, sparks: 1, len: 58, col: null, stew: !!stew,
     };
     flying.push(L);
     run('thrown', L, !!auto);
-    hideHint(); haptic(8, true);
+    fx.uncounted = false;
+    hideHint(); if (!stew) haptic(8, true);
   }
   function landLog(L) {
+    L.from = S.fuel;
     S.fuel = Math.min(100, S.fuel + L.fuel);
     flare = Math.min(0.9, flare + L.flare);
     emberBurst(L.x1, L.y1 - 8 * U, Math.round((9 + ((I * 9) | 0)) * L.sparks), 0.6 + I * 0.5);
@@ -469,7 +474,7 @@
     Sound.thud(); Sound.crackle(1.4); Sound.crackle(1);
     run('land', L);
     const now = performance.now();
-    if (now - lastRoll >= 1000) { lastRoll = now; rollRare('log'); } // 連打しても抽選は毎秒1回まで
+    if (!L.stew && now - lastRoll >= 1000) { lastRoll = now; rollRare('log'); } // 連打しても抽選は毎秒1回まで
   }
 
   // ================= レアな出来事 =================
@@ -700,7 +705,7 @@
 
     // --- 時間でのレア抽選（火が燃えている間、10秒ごと） ---
     if (!fx.freeze) ambT += dt;
-    if (ambT >= 10) { ambT = 0; rollRare('amb'); }
+    if (ambT >= fx.ambGap) { ambT = 0; rollRare('amb'); } // ふだんは10秒ごと。おまかせ火の番の間は20秒ごと
 
     // --- 音 ---
     crackT -= dt;
@@ -1076,7 +1081,36 @@
     statusParts[key] = text;
     $('wx').textContent = Object.values(statusParts).filter(Boolean).join('　');
   }
-  function addChip(id, label, fn) { const b = el('button', 'chip', label); b.id = id; b.addEventListener('click', (e) => { Sound.unlock(); fn(e); }); $('chips').appendChild(b); return b; }
+  // チップ: show() が真のときだけ見える。label(short) は、数が多いとき短い表記を返す。選択肢を出すあいだは、ほかのチップを隠す
+  const CHIPS = [], CHIP_OFF = [];
+  let chipMenu = null;
+  function addChip(id, label, fn, show) {
+    const b = el('button', 'chip'); b.id = id; b.hidden = true;
+    b.addEventListener('click', (e) => { Sound.unlock(); fn(e); syncChips(); });
+    CHIPS.push({ el: b, show: show || (() => true), label: typeof label === 'function' ? label : () => label, hot: null });
+    $('chips').appendChild(b);
+    return b;
+  }
+  function closeChipMenu() { if (chipMenu) for (const b of chipMenu) b.remove(); chipMenu = null; }
+  function openChipMenu(items) { // items: [表示, 押したときの処理, id]
+    closeChipMenu();
+    chipMenu = items.map(([label, fn, id]) => {
+      const b = el('button', 'chip', label); if (id) b.id = id;
+      b.addEventListener('click', () => { Sound.unlock(); closeChipMenu(); fn(); syncChips(); });
+      $('chips').appendChild(b);
+      return b;
+    });
+    syncChips();
+  }
+  function syncChips() { // DOM は変わったときだけ書く
+    const base = !chipMenu && !CHIP_OFF.some((fn) => fn());
+    const vis = CHIPS.filter((c) => { const v = base && c.show(); if (c.el.hidden === v) c.el.hidden = !v; return v; });
+    const tight = vis.length >= 4 || (chipMenu && chipMenu.length >= 5);
+    for (const c of vis) { const t = c.label(tight); if (c.el.textContent !== t) c.el.textContent = t; }
+    $('chips').classList.toggle('tight', !!tight);
+  }
+  HOOKS.sec.push(syncChips);
+  HOOKS.boot.push(syncChips);
   let noteTimer = 0;
   function closeNote() { clearTimeout(noteTimer); app.classList.remove('noting'); }
   function showNote(title, lines, opt) {
@@ -1273,11 +1307,12 @@
   fx.tint = 'fire'; fx.tintT = 0;
   const wfx = { crack: 0, slow: 0, haze: 0, pops: [], forced: null, preview: false };
   const hazes = [];
+  const uncounted = () => wfx.preview || fx.uncounted; // プレビューと、おまかせの薪は記録に数えない
   HOOKS.thrown.push((L) => {
     let w = wfx.forced || WMAP[S.woodSel];
     if (!w) { let x = Math.random() * 100; w = WOODS.find((o) => (x -= o.w) < 0) || WOODS[0]; }
     Object.assign(L, { wood: w.id, col: w.col, len: w.len, th: w.th, fuel: w.fuel, flare: w.flare, sparks: w.sparks });
-    if (wfx.preview) return;
+    if (uncounted()) return;
     const rec = S.wood[w.id] || (S.wood[w.id] = { n: 0, first: Date.now() });
     if (++rec.n === 1) { toast('', `はじめての薪：${w.name}`, '図鑑の「薪」に記録', 2600); S.unseen = true; syncButtons(); }
   });
@@ -1318,12 +1353,13 @@
   HOOKS.front.push(() => {
     for (const p of hazes) { const k = p.age / p.life; blob([255, 196, 214], p.x, p.y, p.size * (1 + k * 1.6), Math.sin(k * Math.PI) * 0.13); }
   });
-  const woodLabel = () => '薪：' + (WMAP[S.woodSel] ? WMAP[S.woodSel].name : 'おまかせ');
-  const chipWood = addChip('chipWood', woodLabel(), () => {
+  const woodLabel = (short) => (short ? '' : '薪：') + (WMAP[S.woodSel] ? WMAP[S.woodSel].name : 'おまかせ');
+  function woodCycle() {
     const order = ['random'].concat(WOODS.map((w) => w.id));
     S.woodSel = order[(order.indexOf(S.woodSel) + 1) % order.length];
-    chipWood.textContent = woodLabel(); save();
-  });
+    save();
+  }
+  addChip('chipWood', woodLabel, woodCycle, () => opened('wood'));
   BOOK_PAGES.push({ id: 'wood', label: '薪', render: (pane) => cardPage(pane, 'wood', '薪', WOODS.map((w) => ({
     id: w.id, name: w.name, glyph: w.glyph, css: orbOf(w.col), rec: S.wood[w.id], desc: w.desc, hint: 'まだくべたことのない薪。',
   })), '本') });
@@ -1404,17 +1440,16 @@
     if (p > 1.02) for (let i = 0; i < 3; i++) blob([255, 140, 40], tx + rnd(-6, 6) * U, ty - rnd(4, 16) * U, rnd(5, 9) * U, 0.5); // 燃えてしまった
     g.globalCompositeOperation = 'source-over';
   });
-  const chipRoast = addChip('chipRoast', 'あぶる', () => { roast.choosing = true; syncChips(); });
-  const chipPick = Object.keys(ROASTS).map((id) => addChip('chipR-' + id, ROASTS[id].name, () => roastStart(id)));
-  const chipBack = addChip('chipRBack', 'やめる', () => { roast.choosing = false; syncChips(); });
-  function syncChips() {
-    const idle = !roast.on && !roast.choosing;
-    for (const c of $('chips').children) c.hidden = !idle;
-    chipRoast.hidden = !(idle && roast.can);
-    for (const c of chipPick) c.hidden = !roast.choosing;
-    chipBack.hidden = !roast.choosing;
+  const ROAST_MENU = [], ROAST_ALSO = []; // うめる・ほりだす など、あとから足す選択肢
+  function roastMenu() {
+    const items = [];
+    if (S.fuel >= 20) for (const id of Object.keys(ROASTS)) items.push([ROASTS[id].name, () => roastStart(id), 'chipR-' + id]);
+    for (const fn of ROAST_MENU) fn(items);
+    items.push(['やめる', () => {}, 'chipRBack']);
+    openChipMenu(items);
   }
-  HOOKS.boot.push(syncChips);
+  const chipRoast = addChip('chipRoast', 'あぶる', roastMenu, () => opened('roast') && (roast.can || ROAST_ALSO.some((fn) => fn())));
+  CHIP_OFF.push(() => roast.on);
   BOOK_PAGES.push({ id: 'roast', label: 'あぶり', render: (pane) => cardPage(pane, 'roast', 'あぶり', Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
     id: id + '-' + res, name: RESULTS[res][0] + ROASTS[id].name, glyph: ROASTS[id].glyph, css: orbOf(roastColor(id, { raw: 0.2, good: 0.75, perfect: 0.86, burnt: 1.2 }[res])),
     rec: S.roast[id + '-' + res], desc: { raw: 'まだ早かった。中は冷たい。', good: 'いい焼き色。ふつうにおいしい。', perfect: 'これ以上ない焼き加減。', burnt: '炭になった。これも思い出。' }[res],
@@ -1694,7 +1729,7 @@
   const streakNow = () => (S.streak.day === dayKey(Date.now()) || S.streak.day === dayKey(Date.now() - 86400000) ? S.streak.n : 0);
   HOOKS.thrown.push(() => {
     const today = dayKey(Date.now()), st = S.streak;
-    if (wfx.preview || st.day === today) return;
+    if (uncounted() || st.day === today) return;
     st.n = st.day === dayKey(Date.now() - 86400000) ? st.n + 1 : 1;
     st.day = today; st.best = Math.max(st.best, st.n);
     save();
@@ -1829,7 +1864,7 @@
     }, 'image/png');
   }
   TAP_GUARD.unshift(() => { if (!photo.on) return false; photoShoot(); return true; });
-  addChip('chipPhoto', '写真', photoEnter);
+  addChip('chipPhoto', '写真', photoEnter, () => opened('photo'));
   FX.photo = photoEnter;
 
   // ================= 気持ちよさ（コンボ・業火タイム・予兆・金の薪・節目） =================
@@ -1838,7 +1873,7 @@
   const combo = { n: 0, last: 0, shown: -1 };
   const elCombo = app.appendChild(el('div')); elCombo.id = 'combo';
   HOOKS.thrown.push((L, auto) => {
-    if (wfx.preview) return;
+    if (uncounted()) return;
     if (auto) { combo.n = 0; return; }
     const now = performance.now(), gap = (now - combo.last) / 1000;
     combo.n = combo.last && gap >= 0.3 && gap <= 0.8 ? combo.n + 1 : 1;
@@ -1960,7 +1995,7 @@
     Sound.tone(1568, 1568, 0.6, 0.06); Sound.tone(2093, 2093, 0.6, 0.05, 0.1);
   }
   HOOKS.thrown.push((L) => {
-    if (wfx.preview) return;
+    if (uncounted()) return;
     if (gold.next) { gold.next = false; btnFeed.classList.remove('gold'); L.gold = gold.preview ? 'preview' : true; L.col = [255, 208, 70]; L.len = 60; L.th = 14; }
     else if (Math.random() < 1 / 500) goldArm(false);
   });
@@ -1983,7 +2018,7 @@
     setTimeout(() => toast('', `くべた薪 ${n.toLocaleString('ja-JP')}本`, TITLES.some((t) => t[0] === n) ? `称号「${titleOf(n)}」` : 'ゾロ目の一本', 3800), 60);
     feel.chime(3); haptic([30, 40, 30]);
   }
-  HOOKS.thrown.push(() => { if (!wfx.preview && isMilestone(S.totalLogs)) milestone(S.totalLogs); });
+  HOOKS.thrown.push(() => { if (!uncounted() && isMilestone(S.totalLogs)) milestone(S.totalLogs); });
   FX.milestone = () => milestone(777);
 
   // --- 図鑑が埋まるたびに図鑑ボタンが光る。全部（？？？のひとつを除く）埋めると炎の色を選べる ---
@@ -2005,7 +2040,7 @@
   def('pendingContinue', () => 0);
   def('pendingGameOver', () => 0);
   const hid = { busy: false, preview: false, taps: 0, timers: [], quietBoot: false, mode: '' };
-  const hiddenOk = () => !hid.busy && !S.pendingContinue && !S.pendingGameOver && S.lastHidden !== dayKey(Date.now());
+  const hiddenOk = () => !hid.busy && !fx.steward && !S.pendingContinue && !S.pendingGameOver && S.lastHidden !== dayKey(Date.now());
   addRare({ id: 'continue', name: 'コンティニュー？', star: 3.5, stars: '★★★☆', glyph: '続', orb: ['#eeeef6', '#5c5c7c', '#0c0c18'], on: 'both', kind: 'hidden', p: 1 / 8192, ok: hiddenOk,
     desc: '続けますか、と聞かれた。答えなくても、火はまた灯った。……答えられないときも、あるのだろうか。', hint: 'まだ、だれも知らない。' });
   addRare({ id: 'gameover', name: '消えた焚き火', star: 4, stars: '★★★★', glyph: '消', orb: ['#ffffff', '#34343e', '#000000'], on: 'both', kind: 'hidden', p: 1 / 16384, ok: hiddenOk,
@@ -2013,6 +2048,7 @@
   const over = $('over'), crt = $('crt'), overT = $('overT'), overN = $('overN'), overS = $('overS');
   const later = (ms, fn) => { hid.timers.push(setTimeout(fn, ms)); };
   function hiddenBegin(mode, record, key) {
+    wakeSet(false); // 画面をつけたままにする指定は、必ず外す
     hid.busy = true; hid.preview = !record; hid.taps = 0; hid.mode = mode;
     if (record) { S[key] = Date.now(); S.lastHidden = dayKey(Date.now()); save(); } // 演出の前に保留の印を保存する（途中で閉じられても記録が残る）
     endFeed(); closeSheet(); closeNote();
@@ -2265,6 +2301,79 @@
   FX['calm-on'] = () => { S.set.calm = true; };
   FX['calm-off'] = () => { S.set.calm = false; setStatus('fever', ''); };
 
+  // ================= ながめる（おまかせ火の番） =================
+  // 何もしなくても火が続く。おまかせの薪は、手でくべた薪とは分けて数える（本数・コンボ・今日の一本・図鑑・抽選に入れない）
+  def('watchLogs', () => 0);
+  def('wake', () => true, true);
+  CHECK.watchLogs = V.count; CHECK_SET.wake = V.bool;
+  const watch = { end: 0, peek: 0, fed: 0 };
+  // 画面を消さない（Screen Wake Lock）。使えない端末・失敗したときは黙って続ける
+  const wake = { lock: null, want: false, failed: false, asking: false };
+  function wakeAsk() {
+    if (!wake.want || wake.lock || wake.asking || !S.set.wake || !navigator.wakeLock || document.hidden) return;
+    wake.asking = true;
+    navigator.wakeLock.request('screen').then((l) => {
+      wake.asking = false;
+      if (!wake.want) { l.release().catch(() => {}); return; }
+      wake.lock = l; wake.failed = false;
+      l.addEventListener('release', () => { if (wake.lock === l) wake.lock = null; }); // 画面を離れると OS が外す。戻ったら取り直す
+    }, () => { wake.asking = false; wake.failed = true; });
+  }
+  function wakeSet(want) {
+    wake.want = want;
+    if (want) wakeAsk();
+    else if (wake.lock) { const l = wake.lock; wake.lock = null; l.release().catch(() => {}); }
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wakeAsk(); });
+  window.addEventListener('pagehide', () => wakeSet(false));
+  const watching = () => watch.end > 0;
+  const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  function watchStart(min) {
+    watch.end = now() + Math.min(60, min) * 60000; watch.peek = 0; // 1回は最長60分（つけっぱなしを防ぐ）
+    app.classList.add('watching'); app.classList.remove('peek');
+    wakeSet(true); // 始めるときのタップの中で頼む
+    toast('', 'ながめる', '火の番はおまかせください。画面をタップすると操作にもどれます', 3400);
+    tickWatch();
+  }
+  function watchStop(done) {
+    watch.end = 0; app.classList.remove('watching', 'peek'); setStatus('watch', '');
+    if (done) toast('', '火の番を終わりました', '', 3200);
+    tickWatch();
+  }
+  function tickWatch() {
+    if (watching() && now() >= watch.end) { watchStop(true); return; }
+    const sleepLeft = slp.end ? (slp.end - Date.now()) / 1000 / slp.total : 0;
+    fx.steward = watching() || sleepLeft > 0.3; // 寝落ちタイマーの前半（残り3割まで）も、おまかせ火の番が働く
+    fx.ambGap = fx.steward ? 20 : 10;
+    if (watching()) setStatus('watch', `ながめる 残り ${mmss(span(now(), watch.end))}`);
+    const want = (watching() || (slp.end > 0 && !slp.asleep)) && !hid.busy;
+    if (want !== wake.want) wakeSet(want);
+    if (fx.steward && S.fuel < 42 && !fx.freeze && !hid.busy && performance.now() - watch.fed >= 4000) { // 火力が42を下回ったら1本（4秒に1本まで）
+      watch.fed = performance.now(); lastThrow = 0;
+      throwLog(cx + rnd(-40, 40) * U, false, true);
+    }
+  }
+  HOOKS.sec.push(tickWatch);
+  HOOKS.update.push(() => { if (watch.peek && performance.now() > watch.peek) { watch.peek = 0; app.classList.remove('peek'); } });
+  TAP_GUARD.splice(1, 0, () => { // 1回目のタップは UI を5秒もどすだけ（薪はくべない）。UI が出ている間は、ふつうにくべられる
+    if (wake.want) wakeAsk();
+    if (!watching()) return false;
+    const hidden = !watch.peek;
+    watch.peek = performance.now() + 5000; app.classList.add('peek');
+    return hidden;
+  });
+  LOW_RATE.push(() => (watching() && !watch.peek) || slp.asleep);
+  function watchMenu() {
+    if (watching()) { openChipMenu([['ながめるのをやめる', () => watchStop(false), 'chipWStop'], ['もどる', () => {}]]); return; }
+    openChipMenu([[15, 30, 60].map((m) => [`${m}分`, () => watchStart(m), 'chipW' + m]), [['やめる', () => {}]]].flat());
+    if (S.set.wake && (!navigator.wakeLock || wake.failed)) toast('', 'ながめる', 'この端末では、画面が自動で消えることがあります', 3600);
+  }
+  addChip('chipWatch', 'ながめる', watchMenu, () => opened('watch'));
+  SET_ROWS.push(({ row, tog }) => row('ながめる・寝落ちの間は画面をつけたままにする', tog(S.set.wake, (v) => { S.set.wake = v; if (!v) wakeSet(false); save(); })));
+  STATS.push((stat) => stat('おまかせでくべた薪', `${S.watchLogs.toLocaleString('ja-JP')}本`));
+  FX.watch = () => watchStart(15);
+  FX['watch-end'] = () => watchStop(true);
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2307,7 +2416,7 @@
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
     window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
       skip: (min) => { const sec = min * 60, f0 = S.fuel; clockSkew += sec * 1000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
-      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
+      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
 })();

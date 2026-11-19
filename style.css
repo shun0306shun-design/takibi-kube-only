@@ -195,8 +195,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #wx { margin-top: 4px; min-height: 14px; font-size: 11px; letter-spacing: .12em; color: var(--dim); opacity: .9; font-variant-numeric: tabular-nums; }
 #chips {
   position: absolute; z-index: 2; left: 0; right: 0; bottom: calc(var(--safe-b) + 124px);
-  display: flex; justify-content: center; gap: 8px; pointer-events: none;
+  display: flex; flex-wrap: nowrap; justify-content: center; gap: 8px; pointer-events: none; overflow: hidden; padding: 0 8px;
 }
+#chips.tight { gap: 6px; }
+#chips.tight .chip { padding: 0 9px; font-size: 11.5px; letter-spacing: .04em; }
 .chip {
   pointer-events: auto; height: 30px; padding: 0 12px; border-radius: 15px; white-space: nowrap;
   background: var(--glass); border: 1px solid var(--line); font-size: 12px; letter-spacing: .08em;
@@ -309,6 +311,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .plain.warn { border-color: rgba(255, 176, 96, .6); color: #ffe3bd; }
 .plain.arm { background: rgba(200, 110, 30, .35); color: #fff; }
 .plain[hidden] { display: none; }
+
+/* ---- ながめる ---- */
+#bar, #chips, #hint { transition: opacity 1.2s; }
+#app.watching:not(.peek) #bar, #app.watching:not(.peek) #chips, #app.watching:not(.peek) #hint { opacity: 0; pointer-events: none; }
+#app.watching:not(.peek) #bar button, #app.watching:not(.peek) #chips .chip { pointer-events: none; }
+#app.watching:not(.peek) #hint { animation: none; }
 
 /* ---- 横向きは非対応 ---- */
 #rotate {
