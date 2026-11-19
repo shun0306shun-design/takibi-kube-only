@@ -75,10 +75,12 @@
   function addRare(r) { RARES.push(r); RMAP[r.id] = r; }
   const starStr = (r) => r.stars || '★'.repeat(r.star);
   // あとから足す機能が差し込む口（更新・描画の各段階、薪を投げた/落ちた、図鑑に新しく載った、起動時）
-  const HOOKS = { update: [], sky: [], ground: [], front: [], top: [], thrown: [], land: [], found: [], resize: [], boot: [], back: [] };
+  const HOOKS = { update: [], sec: [], sky: [], ground: [], front: [], top: [], thrown: [], land: [], found: [], resize: [], boot: [], back: [] };
   const run = (name, a, b) => { for (const fn of HOOKS[name]) fn(a, b); };
   const TRIG = {}, BUSY = {}, FX = {}, TAP_GUARD = [], BURN_MUL = [], RARE_MUL = [];
-  const BOOK_PAGES = [], SET_ROWS = [], STATS = [];
+  const BOOK_PAGES = [], SET_ROWS = [], SET_TOP = [], STATS = [], REC_ROWS = [], AWAY_LINES = [];
+  let secAcc = 0;
+  HOOKS.update.push((dt, real) => { secAcc += real; if (secAcc >= 1) { secAcc = Math.min(1, secAcc - 1); run('sec'); } }); // 1秒に1回でよい処理はここに集める
   const STAGES = [[90, '天を焦がす炎'], [65, '大きな焚き火'], [40, '焚き火'], [20, '小さな火'], [5, '種火'], [0, '熾火']];
   const stageOf = (f) => STAGES.find((s) => f >= s[0])[1];
 
@@ -100,11 +102,18 @@
   let S = loadState();
   // 新機能の保存項目。古いセーブデータには無いので、足りないときだけ初期値で補う（既存の値には触れない）
   const DEFS = [];
-  function applyDefs() { for (const [k, make, inSet] of DEFS) { const o = inSet ? S.set : S; if (o[k] === undefined) o[k] = make(); } }
+  function fillDefs(s) { for (const [k, make, inSet] of DEFS) { const o = inSet ? s.set : s; if (o[k] === undefined) o[k] = make(); } return s; }
+  function applyDefs() { fillDefs(S); }
   function def(key, make, inSet) { DEFS.push([key, make, inSet]); applyDefs(); }
   let dirty = false, saveT = 0;
+  let noSave = false, saveFailTold = false;
   function save() {
-    try { S.lastSeen = Date.now(); localStorage.setItem(KEY, JSON.stringify(S)); dirty = false; } catch (e) { /* 保存不可でも遊べる */ }
+    if (noSave) return; // 読み込み直前など、いまの状態で上書きしてはいけないとき
+    try { S.lastSeen = Date.now(); localStorage.setItem(KEY, JSON.stringify(S)); dirty = false; } catch (e) {
+      if (saveFailTold) return; // 保存できなくても遊べる。最初の1回だけ知らせる
+      saveFailTold = true;
+      setTimeout(() => showNote('記録について', ['この端末では、いま記録を保存できません（プライベートブラウズなど）。', '遊ぶことはできます。'], { ms: 14000 }), 900);
+    }
   }
 
   // 燃焼: df/dt = -(A + B f)。離れていた時間ぶんも同じ式で減らす（熾火は消えない）
@@ -1163,11 +1172,12 @@
     for (const fn of STATS) fn(stat);
     stat('はじめて火をおこした日', fmtDay(S.firstDay));
     pane.appendChild(dl);
+    for (const fn of REC_ROWS) fn(pane);
     const armed = Date.now() < wipeArm;
     const wipe = el('button', 'danger' + (armed ? ' arm' : ''), armed ? '本当に消す（もう一度タップ）' : '記録をすべて消す');
     wipe.addEventListener('click', () => {
       if (Date.now() < wipeArm) {
-        const keep = S.set; S = fresh(); S.set = keep; applyDefs(); wipeArm = 0; selId = null; lastCount = -1;
+        const keep = S.set; S = fresh(); S.set = keep; applyDefs(); wipeArm = 0; try { localStorage.removeItem(KEY + '.bak'); } catch (e) { /* 無ければ何もしない */ } selId = null; lastCount = -1;
         fx.flame = null; fx.flameT = 0; save(); syncButtons(); renderSet(); toast('', '記録を消しました', '', 2000);
       } else { wipeArm = Date.now() + 4000; renderSet(); setTimeout(() => { if (sheetTab === 'set' && app.classList.contains('sheet')) renderSet(); }, 4100); }
     });
@@ -2071,6 +2081,162 @@
       setTimeout(() => hiddenSettle('continue', 'pendingContinue'), 1500);
     }
   });
+
+  // ================= 記録を守る（書き出し・読み込み） =================
+  // 記録は localStorage にしかないので、1行の文字列にして手元に残せるようにする。
+  // 読み込むときは、知っているキーだけを型を確かめながら写し取る（知らないキーや壊れた値は捨てる）
+  const V = {
+    num: (min, max, int) => (v) => (typeof v === 'number' && isFinite(v) ? (int ? Math.round(clamp(v, min, max)) : clamp(v, min, max)) : undefined),
+    bool: (v) => (typeof v === 'boolean' ? v : undefined),
+    str: (max, re) => (v) => (typeof v === 'string' && v.length <= max && (!re || re.test(v)) ? v : undefined),
+    oneOf: (list) => (v) => (list.includes(v) ? v : undefined),
+    obj: (shape) => (v) => { // すべての項目が正しいときだけ通す
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+      const o = {};
+      for (const k of Object.keys(shape)) { const c = shape[k](v[k]); if (c === undefined) return undefined; o[k] = c; }
+      return o;
+    },
+    rec: (ids, item) => (v) => { // 決まった ID ごとの記録。知らない ID は捨てる
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+      const o = {};
+      for (const id of ids()) { const c = v[id] == null ? undefined : item(v[id]); if (c !== undefined) o[id] = c; }
+      return o;
+    },
+  };
+  V.time = V.num(0, 4e12, true);
+  V.count = V.num(0, 1e9, true);
+  V.day = V.str(10, /^(\d{4}-\d{2}-\d{2})?$/);
+  V.nfirst = (v) => { const o = V.obj({ n: V.num(1, 1e9, true), first: V.time })(v); if (o && V.time(v.last) !== undefined) o.last = V.time(v.last); return o; };
+  const CHECK = { // 保存データの項目ごとの検査。あとから足す機能は、ここに自分の項目を足す
+    fuel: V.num(0, 100), lastSeen: V.time, firstDay: V.time, totalLogs: V.count, burnSec: V.num(0, 1e10), unseen: V.bool,
+    col: V.rec(() => RARES.map((r) => r.id), V.nfirst),
+    log: (v) => (Array.isArray(v) ? v.slice(0, 100).map((e) => {
+      if (!e || typeof e !== 'object' || V.time(e.t) === undefined) return null;
+      if (RMAP[e.id]) return { id: e.id, t: V.time(e.t) };
+      return V.str(200)(e.txt) ? { t: V.time(e.t), txt: e.txt } : null;
+    }).filter(Boolean) : undefined),
+    wood: V.rec(() => WOODS.map((w) => w.id), V.nfirst),
+    woodSel: V.oneOf(['random'].concat(WOODS.map((w) => w.id))),
+    roast: V.rec(() => roastKeys(), V.nfirst),
+    weather: V.obj({ kind: V.oneOf(Object.keys(WX_NAME)), until: V.time }),
+    streak: V.obj({ day: V.day, n: V.count, best: V.count }),
+    maxCombo: V.count, flameColor: V.oneOf(['fire', 'blue', 'green', 'purple', 'pink', 'gold', 'rainbow']), lastHidden: V.day,
+  };
+  const CHECK_SET = {
+    sound: V.bool, vib: V.bool, sky: V.oneOf(['auto', 'night', 'day']), wx: V.oneOf(['auto'].concat(Object.keys(WX_NAME))),
+    mix: V.obj(Object.fromEntries(MIX.map(([id]) => [id, V.obj({ on: V.bool, vol: V.num(0, 1) })]))),
+  };
+  const roastKeys = () => Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((r) => id + '-' + r));
+  function sanitize(src) {
+    const out = fresh();
+    for (const k of Object.keys(CHECK)) { const c = CHECK[k](src[k]); if (c !== undefined) out[k] = c; }
+    if (src.set && typeof src.set === 'object') for (const k of Object.keys(CHECK_SET)) { const c = CHECK_SET[k](src.set[k]); if (c !== undefined) out.set[k] = c; }
+    return fillDefs(out); // 通らなかった項目・足りない項目は初期値で補う
+  }
+  const b64 = {
+    enc(str) {
+      const bytes = new TextEncoder().encode(str); // 日本語を含むので UTF-8 にしてから
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+      return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    },
+    dec(s) {
+      const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new TextDecoder().decode(bytes);
+    },
+  };
+  const PREFIX = 'TKB1.';
+  function exportText() { // その場かぎりの状態と、隠し要素の保留の印は含めない（sanitize が知っているキーだけを写すので自然に落ちる）
+    const o = sanitize(S);
+    delete o.pendingContinue; delete o.pendingGameOver;
+    o.lastSeen = Date.now(); o.exportedAt = Date.now();
+    return PREFIX + b64.enc(JSON.stringify(o));
+  }
+  function importParse(text) { // 通らなければ null。何も変えない
+    try {
+      text = String(text).trim();
+      if (text.length > 200000 || !text.startsWith(PREFIX)) return null;
+      const o = JSON.parse(b64.dec(text.slice(PREFIX.length)));
+      if (!o || typeof o !== 'object' || Array.isArray(o) || o.v !== 1 || typeof o.totalLogs !== 'number' || !isFinite(o.totalLogs) || o.totalLogs < 0) return null;
+      const s = sanitize(o);
+      return { state: s, at: V.time(o.exportedAt) || 0 };
+    } catch (e) { if (DEBUG) console.warn('import: ' + e.message); return null; }
+  }
+  function replaceState(json) { // いまの記録を1世代だけ控えに残して置き換え、読み込み直す
+    try {
+      const cur = localStorage.getItem(KEY);
+      if (cur) localStorage.setItem(KEY + '.bak', cur);
+      localStorage.setItem(KEY, json);
+    } catch (e) { toast('', '保存できませんでした', '', 2600); return; }
+    noSave = true; location.reload();
+  }
+  function shareOrDownload(blob, name) { // Web Share が使えればそれで、だめならダウンロード
+    const file = typeof File === 'function' ? new File([blob], name, { type: blob.type }) : null;
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) { navigator.share({ files: [file], title: '焚き火くべ' }).catch(() => {}); return; }
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+  let recView = '', recArm = 0, recParsed = null;
+  REC_ROWS.push((pane) => {
+    const box = el('div', 'recbox');
+    const btn = (label, fn, cls) => { const b = el('button', 'plain' + (cls ? ' ' + cls : ''), label); b.addEventListener('click', fn); return b; };
+    const go = (v) => { recView = v; recArm = 0; recParsed = null; renderSet(); };
+    let hasBak = false;
+    try { hasBak = !!localStorage.getItem(KEY + '.bak'); } catch (e) { /* 読めなければ出さない */ }
+    if (recView === 'out') {
+      const text = exportText(), ta = el('textarea'); ta.value = text; ta.readOnly = true; ta.rows = 3;
+      box.append(el('p', 'note', 'この1行が、いまの記録のすべてです。メモやメールなど、なくさない場所に残してください。'), ta);
+      box.append(btn('コピー', () => {
+        const manual = () => { ta.focus(); ta.select(); toast('', '全体を選択しました', 'コピーして、どこかに貼りつけてください', 3000); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => toast('', 'コピーしました', '', 2000), manual); else manual();
+      }), btn('ファイルで保存・共有', () => {
+        const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+        shareOrDownload(new Blob([text], { type: 'text/plain' }), `takibi-kiroku-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.txt`);
+      }), btn('とじる', () => go('')));
+    } else if (recView === 'in') {
+      const ta = el('textarea'); ta.rows = 3; ta.placeholder = 'TKB1. で始まる文字列を貼りつけ';
+      const msg = el('p', 'note');
+      box.append(el('p', 'note', '書き出した文字列を貼りつけてください。いまの記録は、読み込んだ記録に置き換わります。'), ta, msg);
+      const apply = btn('この記録に置き換える', () => {
+        if (!recParsed) return;
+        if (Date.now() < recArm) { replaceState(JSON.stringify(recParsed.state)); return; }
+        recArm = Date.now() + 5000; apply.textContent = '本当に置き換える（もう一度タップ）'; apply.classList.add('arm');
+      }, 'warn');
+      apply.hidden = true;
+      box.append(btn('たしかめる', () => {
+        recParsed = importParse(ta.value); recArm = 0; apply.classList.remove('arm'); apply.textContent = 'この記録に置き換える';
+        apply.hidden = !recParsed;
+        msg.textContent = recParsed
+          ? `くべた薪 ${recParsed.state.totalLogs.toLocaleString('ja-JP')}本 ／ 図鑑 ${Object.keys(recParsed.state.col).length}種 ／ 書き出した日 ${recParsed.at ? fmtDay(recParsed.at) : '不明'}`
+          : '読み込めませんでした';
+      }), apply, btn('とじる', () => go('')));
+    } else {
+      box.append(btn('記録を書き出す', () => {
+        if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); // 消されにくくしてもらう（結果は表示しない）
+        go('out');
+      }), btn('記録を読み込む', () => go('in')));
+      if (hasBak) {
+        const back = btn('ひとつ前の記録に戻す', () => {
+          if (Date.now() < recArm) { let bak = null; try { bak = localStorage.getItem(KEY + '.bak'); } catch (e) { /* 何もしない */ } if (bak) replaceState(bak); return; }
+          recArm = Date.now() + 5000; back.textContent = '本当に戻す（もう一度タップ）'; back.classList.add('arm');
+        }, 'warn');
+        box.appendChild(back);
+      }
+    }
+    pane.appendChild(box);
+  });
+  // iPhone の Safari は、ホーム画面に追加していないサイトの記録を、しばらく開かないと消すことがある。長く遊んだ人に1度だけ知らせる
+  def('a2hs', () => false);
+  CHECK.a2hs = V.bool;
+  HOOKS.sec.push(() => {
+    if (S.a2hs || navigator.standalone !== false || S.totalLogs <= 300 || app.classList.contains('noting')) return;
+    S.a2hs = true; save();
+    showNote('記録について', ['ホーム画面に追加すると、記録が消えにくくなります。', '設定から書き出しもできます。'], { ms: 16000 });
+  });
+  FX.a2hs = () => showNote('記録について', ['ホーム画面に追加すると、記録が消えにくくなります。', '設定から書き出しもできます。'], { ms: 16000 });
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
