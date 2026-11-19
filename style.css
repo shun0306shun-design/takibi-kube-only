@@ -254,6 +254,51 @@ button { font: inherit; color: inherit; cursor: pointer; }
 @keyframes glow { 0% { box-shadow: 0 0 0 0 rgba(255, 200, 100, .9); border-color: #ffd890; } 100% { box-shadow: 0 0 0 22px rgba(255, 200, 100, 0); } }
 #app.photo #combo { opacity: 0; }
 
+/* ---- 隠し要素（transform と opacity だけで動かす。点滅はさせない） ---- */
+#over, #crt { position: fixed; top: 0; right: 0; bottom: 0; left: 0; max-width: 540px; margin: 0 auto; display: none; }
+#over { z-index: 50; place-items: center; text-align: center; touch-action: none; background: rgba(0, 0, 0, 0); }
+#over.on { display: grid; }
+#over.black { background: #000; }
+#over.cont { transition: background 1.1s ease-in; }
+#over.cont.dark { background: rgba(0, 0, 0, .94); }
+#overText { opacity: 0; transition: opacity .5s; }
+#over.slow #overText { transition: opacity 2.6s; }
+#over.text #overText { opacity: 1; }
+#overT { display: block; font-weight: 400; font-size: 28px; letter-spacing: .32em; margin-right: -.32em; color: #e9e2d6; }
+#overN { display: block; margin-top: 14px; font-size: 92px; line-height: 1.1; color: #f4eadb; font-variant-numeric: tabular-nums; }
+#overN:empty { display: none; }
+#overN.shake { animation: nshake .18s linear; }
+@keyframes nshake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-7px); } 75% { transform: translateX(7px); } }
+#overS { display: block; margin-top: 20px; font-size: 13px; letter-spacing: .3em; color: #8f867a; }
+#crt { z-index: 51; pointer-events: none; }
+#crt.on { display: block; }
+#crt i {
+  position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 2px; background: #fff;
+  box-shadow: 0 0 8px 2px rgba(255, 255, 255, .9), 0 0 16px 4px rgba(200, 220, 255, .4);
+  opacity: 0; animation: crtLine .6s linear forwards; will-change: transform, opacity;
+}
+@keyframes crtLine { /* 横一本の線 → 中央の点 → 一瞬の残光 → 消える */
+  0%, 24% { opacity: 0; transform: scaleX(1); }
+  28% { opacity: 1; transform: scaleX(1); }
+  66% { opacity: 1; transform: scaleX(.012); }
+  84% { opacity: .9; transform: scaleX(.012); }
+  100% { opacity: 0; transform: scaleX(.012); }
+}
+#app.crt { animation: crtApp .17s cubic-bezier(.55, 0, 1, 1) forwards; will-change: transform; }
+@keyframes crtApp { 0% { transform: scaleY(1); } 100% { transform: scaleY(.004); } }
+#app.crt::after, #app.reborn::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 40; pointer-events: none; }
+#app.crt::after { background: #fff; animation: crtWhite .17s ease-in forwards; }
+@keyframes crtWhite { 0% { opacity: 0; } 100% { opacity: .85; } }
+#app.off { visibility: hidden; }
+#app.reborn::after { background: #000; animation: reborn 2.6s ease-out forwards; }
+@keyframes reborn { 0%, 25% { opacity: 1; } 100% { opacity: 0; } }
+
+.card.hid { border-color: rgba(190, 190, 255, .34); background: linear-gradient(#16141e, #0a0910); }
+.card.hid .st { color: #d6ceff; }
+#toast.special { border-color: rgba(230, 226, 255, .8); background: rgba(8, 8, 14, .92); box-shadow: 0 0 34px rgba(200, 200, 255, .4); padding: 14px 24px 12px; }
+#toast.special b { font-size: 18px; }
+#toast.special b span { color: #d6ceff; }
+
 /* ---- 横向きは非対応 ---- */
 #rotate {
   display: none; position: absolute; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; place-items: center;

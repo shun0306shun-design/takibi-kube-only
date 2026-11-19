@@ -113,7 +113,7 @@
 
   // ================= 音（WebAudioで合成。素材ファイルなし） =================
   const Sound = (() => {
-    let ctx = null, master, bedG, hissG, white, brown, on = false, factor = 1, fireVol = 1;
+    let ctx = null, master, bedG, hissG, white, brown, on = false, factor = 1, fireVol = 1, dead = false;
     const builders = [];
     function build() {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -144,9 +144,10 @@
       return true;
     }
     const quiet = (pr) => { if (pr && pr.catch) pr.catch(() => {}); };
-    const live = () => on && ctx && ctx.state === 'running';
+    const live = () => on && !dead && ctx && ctx.state === 'running';
     function set(v) {
       on = v;
+      if (dead) return;
       if (v) {
         if (!ctx && !build()) return;
         if (ctx.state !== 'running') quiet(ctx.resume());
@@ -156,7 +157,7 @@
       }
     }
     function unlock() { if (S.set.sound && (!ctx || ctx.state !== 'running')) set(true); }
-    function pause(p) { if (!ctx) return; if (p) quiet(ctx.suspend()); else if (on) quiet(ctx.resume()); }
+    function pause(p) { if (!ctx || dead) return; if (p) quiet(ctx.suspend()); else if (on) quiet(ctx.resume()); }
     function level(I, lit) {
       if (!live()) return;
       bedG.gain.setTargetAtTime((0.04 + 0.3 * I * lit) * fireVol, ctx.currentTime, 0.3);
@@ -185,8 +186,22 @@
       set, unlock, pause, level, live,
       ctx: () => ctx, out: () => master,
       onBuild(fn) { builders.push(fn); if (ctx) fn(ctx, master, { white, brown }); },
-      setFactor(v) { factor = v; if (on && ctx) master.gain.setTargetAtTime(0.85 * v, ctx.currentTime, 0.4); },
+      setFactor(v) { factor = v; if (on && ctx && !dead) master.gain.setTargetAtTime(0.85 * v, ctx.currentTime, 0.4); },
       setFireVol(v) { fireVol = v; },
+      puchun() { // 古いテレビの電源を切ったような短い電子音を1回。同時に、ほかの音をすべてぶつっと止める
+        if (!ctx) return;
+        const t = ctx.currentTime;
+        if (live()) {
+          const o = ctx.createOscillator(), gn = ctx.createGain();
+          o.type = 'square'; o.frequency.setValueAtTime(2400, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.13);
+          gn.gain.setValueAtTime(0.0001, t); gn.gain.linearRampToValueAtTime(0.1, t + 0.008); gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+          o.connect(gn); gn.connect(ctx.destination); o.start(t); o.stop(t + 0.2);
+        }
+        dead = true;
+        master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(0, t);
+        setTimeout(() => { if (dead) quiet(ctx.suspend()); }, 500);
+      },
+      revive() { dead = false; if (on && ctx) { quiet(ctx.resume()); master.gain.setTargetAtTime(0.85 * factor, ctx.currentTime, 0.3); } },
       tone(...a) { if (live()) tone(...a); },
       noise(...a) { if (live()) noise(...a); },
       crackle(v = 1) { if (live() && fireVol > 0) noise(rnd(0.012, 0.06), 'highpass', rnd(1200, 5200), rnd(0.12, 0.45) * v * fireVol, rnd(0.5, 2)); },
@@ -549,7 +564,7 @@
     }
     flare *= Math.exp(-2.6 * dt);
     lit = clamp(S.fuel / 6, 0, 1);
-    const target = clamp(Math.pow(S.fuel / 100, 0.8) * 0.92 + flare * 0.5, 0, 1.12);
+    const target = clamp(Math.pow(S.fuel / 100, 0.8) * 0.92 + flare * 0.5, 0, 1.12) * (fx.veil ? 0.12 : 1);
     I += (target - I) * Math.min(1, dt * 4);
     flick = 1 + 0.07 * Math.sin(T * 11.3) + 0.05 * Math.sin(T * 23.7 + 1) + 0.04 * Math.sin(T * 5.1 + 2);
     flameH = (36 + 214 * I) * U * (0.2 + 0.8 * lit);
@@ -1609,7 +1624,7 @@
   // ================= 留守のあいだに・今日の一本・称号 =================
   // 戻ってきたとき、離れていた間の火の様子と、その間に来た訪問者を短く伝える
   function awayReport(sec, f0) {
-    if (sec < 180 || S.totalLogs === 0) return;
+    if (sec < 180 || S.totalLogs === 0 || hid.quietBoot) return;
     const k = BURN_A / BURN_B;
     const burnT = f0 < 5 ? 0 : Math.min(sec, Math.log((f0 + k) / (5 + k)) / BURN_B); // 種火以上で燃えていた時間
     const lines = [];
@@ -1943,6 +1958,110 @@
     row('ふだんの炎', seg(S.flameColor, [['fire', '橙'], ['blue', '青'], ['green', '翠'], ['purple', '紫'], ['pink', '桜'], ['gold', '金'], ['rainbow', '虹']], (v) => { S.flameColor = v; save(); })).classList.add('stack');
   });
 
+  // ================= 隠し要素: 擬似コンティニュー と 起こるはずのない「ゲームオーバー」 =================
+  // どちらも既存の抽選タイミングごとに、ごく低い確率で起きる（1日に1回まで。同じ日に両方は起きない）。
+  // 消えるのは見た目だけで、くべた本数・火の状態・図鑑・設定などの記録には一切触れない。
+  def('lastHidden', () => '');
+  def('pendingContinue', () => 0);
+  def('pendingGameOver', () => 0);
+  const hid = { busy: false, preview: false, taps: 0, timers: [], quietBoot: false, mode: '' };
+  const hiddenOk = () => !hid.busy && !S.pendingContinue && !S.pendingGameOver && S.lastHidden !== dayKey(Date.now());
+  addRare({ id: 'continue', name: 'コンティニュー？', star: 3.5, stars: '★★★☆', glyph: '続', orb: ['#eeeef6', '#5c5c7c', '#0c0c18'], on: 'both', kind: 'hidden', p: 1 / 8192, ok: hiddenOk,
+    desc: '続けますか、と聞かれた。答えなくても、火はまた灯った。……答えられないときも、あるのだろうか。', hint: 'まだ、だれも知らない。' });
+  addRare({ id: 'gameover', name: '消えた焚き火', star: 4, stars: '★★★★', glyph: '消', orb: ['#ffffff', '#34343e', '#000000'], on: 'both', kind: 'hidden', p: 1 / 16384, ok: hiddenOk,
+    desc: 'この焚き火に、終わりはない。……はずだった。あの日、火はたしかに一度消えた。それでも、くべた薪も記録も、何ひとつ失われてはいなかった。', hint: 'まだ、だれも知らない。' });
+  const over = $('over'), crt = $('crt'), overT = $('overT'), overN = $('overN'), overS = $('overS');
+  const later = (ms, fn) => { hid.timers.push(setTimeout(fn, ms)); };
+  function hiddenBegin(mode, record, key) {
+    hid.busy = true; hid.preview = !record; hid.taps = 0; hid.mode = mode;
+    if (record) { S[key] = Date.now(); S.lastHidden = dayKey(Date.now()); save(); } // 演出の前に保留の印を保存する（途中で閉じられても記録が残る）
+    endFeed(); closeSheet(); closeNote();
+    overT.textContent = ''; overN.textContent = ''; overS.textContent = '';
+  }
+  function hiddenEnd() { // 元の画面に戻す（擬似コンティニューの終わりと、プレビューから抜けるとき）
+    for (const t of hid.timers) clearTimeout(t);
+    hid.timers.length = 0;
+    over.className = ''; crt.className = ''; app.classList.remove('crt', 'off');
+    fx.veil = false; fx.freeze = false; I = 0; // 熾火から、ふっと灯りなおす
+    if (hid.mode === 'gameover') { Sound.revive(); if (halted) { halted = false; requestAnimationFrame(frame); } }
+    hid.busy = false; hid.mode = '';
+  }
+  // 図鑑に記録して、特別な見た目のトーストで知らせ、保留の印を消す
+  function hiddenSettle(id, key) {
+    const c = recordRare(id, S[key]);
+    S[key] = 0; save();
+    announce(RMAP[id], c.n === 1 ? 'はじめて出会った！ 図鑑に記録' : `${c.n}回目`, 'special');
+  }
+
+  // --- 擬似コンティニュー ---
+  function pseudoContinue(record) {
+    if (hid.busy) return;
+    hiddenBegin('continue', record, 'pendingContinue');
+    fx.freeze = true; fx.veil = true;                       // 火がふっと弱まる（本数も火力も動かさない）
+    over.className = 'on cont';
+    later(30, () => over.classList.add('dark'));            // 1秒ほどで静かに暗くなる
+    let n = 10;
+    const tick = () => {
+      overN.textContent = String(n);
+      if (n > 0) Sound.tone(n <= 3 ? 990 : 880, n <= 3 ? 990 : 880, 0.07, 0.05, 0, 'square');
+      if (n-- > 0) later(1000, tick);
+      else later(900, () => {                                 // 0 になっても、何事もなかったように火が灯る
+        hiddenEnd();
+        if (record) later(1200, () => hiddenSettle('continue', 'pendingContinue'));
+        else toast(RMAP.continue.stars, RMAP.continue.name, 'プレビュー（記録されません）', 4000, 'special');
+      });
+    };
+    later(1300, () => { overT.textContent = 'CONTINUE?'; over.classList.add('text'); tick(); });
+  }
+
+  // --- ゲームオーバー ---
+  function gameOver(record) {
+    if (hid.busy) return;
+    hiddenBegin('gameover', record, 'pendingGameOver');
+    halted = true;                                          // 1) 何の前触れもなく、炎と火の粉が止まる（描画ループも止める）
+    over.className = 'on';
+    later(320, () => {                                      // 2) プチュン: 縦につぶれて白い線 → 点 → 消える
+      Sound.puchun();
+      app.classList.add('crt'); crt.className = 'on';
+      later(170, () => app.classList.add('off'));
+      later(600, () => { crt.className = ''; over.classList.add('black'); });
+    });
+    later(320 + 600 + 2000, () => {                         // 3) 真っ暗なまま2秒 → 4) 静かに文字が出る。あとは何も起きない
+      overT.textContent = 'GAME OVER'; overS.textContent = '火は、消えた。';
+      over.classList.add('text', 'slow');
+    });
+  }
+  TRIG.continue = pseudoContinue; TRIG.gameover = gameOver;
+  FX.continue = () => pseudoContinue(false); FX.gameover = () => gameOver(false);
+
+  // 演出のあいだは、タップ・長押し・スワイプ・キー入力をすべて受け取って無視する。
+  // 抜け出せるのは再読み込みかアプリを閉じたときだけ（プレビューのときだけ、5回タップで抜けられる）
+  for (const ev of ['pointerdown', 'pointerup', 'pointermove', 'touchstart', 'touchmove', 'touchend', 'click', 'dblclick', 'contextmenu', 'wheel']) {
+    over.addEventListener(ev, (e) => {
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      if (ev !== 'pointerdown') return;
+      if (hid.mode === 'continue') { overN.classList.remove('shake'); void overN.offsetWidth; overN.classList.add('shake'); } // 数字が揺れるだけ。カウントは止まらない
+      else if (hid.mode === 'gameover' && hid.preview && ++hid.taps >= 5) hiddenEnd();
+    }, { passive: false });
+  }
+  window.addEventListener('keydown', (e) => { // 再読み込みなどブラウザ自身の操作（F5、Ctrl/⌘ との組み合わせ）は止めない
+    if (!hid.busy || e.ctrlKey || e.metaKey || /^F\d+$/.test(e.key)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
+
+  // 次に起動したとき、保留の印があれば図鑑を解除する（印はすぐ消すので、二重には記録されない）
+  HOOKS.boot.unshift(() => {
+    if (S.pendingGameOver) {
+      hid.quietBoot = true; I = 0;
+      app.classList.add('reborn');                          // 一瞬だけ暗い画面から始まり、熾火がふっと灯る
+      setTimeout(() => { app.classList.remove('reborn'); hiddenSettle('gameover', 'pendingGameOver'); }, 2600);
+    } else if (S.pendingContinue) {
+      hid.quietBoot = true;
+      setTimeout(() => hiddenSettle('continue', 'pendingContinue'), 1500);
+    }
+  });
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(now) {
@@ -1967,7 +2086,8 @@
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: RARES.map((r) => r.id).concat(Object.keys(FX)), state: () => S, pick: pickRare };
+    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), real: (id) => trigger(id, true), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
+      counts: () => ({ flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
 })();
