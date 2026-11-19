@@ -370,6 +370,8 @@
     return fx.flame === 'rainbow' ? RAINBOW[Math.floor(T * 2.3) % RAINBOW.length] : fx.flame;
   };
 
+  // 薪による一時的な色味。レアの色炎があるときはそちらを優先し、ふだんの炎にだけ混ぜる
+  const flamePal = () => { const n = palName(); return n === 'fire' && fx.tintT > 0 && Math.random() < 0.62 ? fx.tint : n; };
   function spawnFlame() {
     const spread = (10 + 34 * I) * U;
     const off = (Math.random() + Math.random() + Math.random() - 1.5) * spread;
@@ -378,7 +380,7 @@
       x: cx + off, y: baseY - rnd(0, 8) * U, ox: off * 0.22,
       vx: rnd(-8, 8) * U, vy: -(52 + 150 * I) * U * (0.42 + 0.78 * center) * rnd(0.8, 1.2),
       life: (0.5 + 0.6 * I) * (0.5 + 0.7 * center) * rnd(0.8, 1.25) * (0.5 + 0.5 * lit), age: 0,
-      size: (20 + 30 * I) * U * rnd(0.7, 1.2) * (0.45 + 0.55 * lit), seed: rnd(0, TAU), pal: palName(),
+      size: (20 + 30 * I) * U * rnd(0.7, 1.2) * (0.45 + 0.55 * lit), seed: rnd(0, TAU), pal: flamePal(),
     });
   }
   function addSpark(x, y, vx, vy, life, size, c, grav) {
@@ -890,7 +892,7 @@
     run('front', day);
     g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 
-    for (const L of flying) { const k = L.t / L.dur, sc = 1.25 - 0.35 * k; drawLog(L.x, L.y, L.rot, L.len * U * sc, 13 * U * sc, 1, 1, 0, L.col); }
+    for (const L of flying) { const k = L.t / L.dur, sc = 1.25 - 0.35 * k; drawLog(L.x, L.y, L.rot, L.len * U * sc, (L.th || 13) * U * sc, 1, 1, 0, L.col); }
 
     // --- 花火 ---
     g.globalCompositeOperation = 'lighter';
@@ -1162,6 +1164,108 @@
   window.addEventListener('pagehide', save);
   let resizeT = 0;
   window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(resize, 120); });
+
+  // ================= 図鑑の共通カード表示 =================
+  // items: { id, name, glyph, css, rec:{n,first}|undefined, desc, hint, stars }
+  const cardSel = {};
+  function cardPage(pane, key, title, items, unit) {
+    const h = el('h2', '', title); h.appendChild(el('small', '', `${items.filter((i) => i.rec).length} / ${items.length}`)); pane.appendChild(h);
+    const grid = el('div', 'grid'), d = el('div'); d.id = 'detail';
+    const show = () => {
+      grid.querySelectorAll('.card').forEach((c) => c.classList.toggle('sel', c.dataset.id === cardSel[key]));
+      d.textContent = '';
+      const it = items.find((i) => i.id === cardSel[key]);
+      if (!it) { d.appendChild(el('small', '', 'カードをタップすると、説明が見られます。')); return; }
+      const b = el('b', '', it.rec ? it.name : '？？？'); if (it.stars) b.appendChild(el('span', 'st', it.stars));
+      d.append(b, el('div', '', it.rec ? it.desc : it.hint));
+      if (it.rec) d.appendChild(el('small', '', `はじめて：${fmtDate(it.rec.first)}　／　${it.rec.n.toLocaleString('ja-JP')}${unit}`));
+    };
+    for (const it of items) {
+      const card = el('button', 'card' + (it.rec ? '' : ' lock')); card.dataset.id = it.id;
+      const orb = el('span', 'orb', it.rec ? it.glyph : '？'); orb.style.cssText = it.css;
+      card.append(orb, el('span', 'nm', it.rec ? it.name : '？？？'), el('span', 'ct', it.rec ? `${it.rec.n.toLocaleString('ja-JP')}${unit}` : '未発見'));
+      card.addEventListener('click', () => { cardSel[key] = it.id; show(); });
+      grid.appendChild(card);
+    }
+    pane.append(grid, d);
+    show();
+  }
+  const orbOf = (c) => `background:radial-gradient(circle at 50% 32%,${rgb(mix(c, [255, 255, 255], 0.55))},${rgb(c)} 58%,${rgb(mix(c, [0, 0, 0], 0.55))});box-shadow:0 0 12px ${rgba(c, 0.4)}`;
+
+  // ================= 薪の種類 =================
+  PAL.drift = { core: [220, 250, 245], edge: [50, 170, 215], glow: [70, 180, 220] };
+  PAL.sakura = { core: [255, 238, 225], edge: [255, 112, 112], glow: [255, 130, 120] };
+  const WOODS = [
+    { id: 'cedar',  name: '杉',         glyph: '杉', w: 30, col: [176, 112, 70],  len: 58, th: 13, fuel: 9,  flare: 0.22, sparks: 1.4, desc: 'よく乾いた杉。火つきがよく、パチパチとにぎやかにはぜる。' },
+    { id: 'sakura', name: '桜',         glyph: '桜', w: 18, col: [128, 72, 66],   len: 56, th: 13, fuel: 9,  flare: 0.18, sparks: 0.8, desc: '甘い香りの煙が、淡い桜色のもやになって漂う。' },
+    { id: 'cone',   name: '松ぼっくり', glyph: '松', w: 14, col: [118, 82, 50],   len: 24, th: 17, fuel: 4,  flare: 0.9,  sparks: 2.4, desc: '松やにで一気に燃え上がるが、すぐに落ち着く。' },
+    { id: 'drift',  name: '流木',       glyph: '流', w: 12, col: [156, 152, 142], len: 60, th: 12, fuel: 8,  flare: 0.2,  sparks: 1,   desc: '海の塩がしみた木。炎がしばらく青みがかる。' },
+    { id: 'oak',    name: '樫',         glyph: '樫', w: 16, col: [92, 62, 40],    len: 62, th: 15, fuel: 12, flare: 0.08, sparks: 0.6, desc: '重くて硬い木。静かに、長く燃えつづける。' },
+    { id: 'bamboo', name: '竹',         glyph: '竹', w: 10, col: [124, 152, 84],  len: 66, th: 11, fuel: 7,  flare: 0.2,  sparks: 1,   desc: '少しおいて節がはぜ、パン！と大きな音を立てる。' },
+  ];
+  const WMAP = Object.fromEntries(WOODS.map((w) => [w.id, w]));
+  def('wood', () => ({}));
+  def('woodSel', () => 'random');
+  fx.tint = 'fire'; fx.tintT = 0;
+  const wfx = { crack: 0, slow: 0, haze: 0, pops: [], forced: null, preview: false };
+  const hazes = [];
+  HOOKS.thrown.push((L) => {
+    let w = wfx.forced || WMAP[S.woodSel];
+    if (!w) { let x = Math.random() * 100; w = WOODS.find((o) => (x -= o.w) < 0) || WOODS[0]; }
+    Object.assign(L, { wood: w.id, col: w.col, len: w.len, th: w.th, fuel: w.fuel, flare: w.flare, sparks: w.sparks });
+    if (wfx.preview) return;
+    const rec = S.wood[w.id] || (S.wood[w.id] = { n: 0, first: Date.now() });
+    if (++rec.n === 1) { toast('', `はじめての薪：${w.name}`, '図鑑の「薪」に記録', 2600); S.unseen = true; syncButtons(); }
+  });
+  HOOKS.land.push((L) => {
+    if (L.wood === 'cedar') wfx.crack = 5;
+    else if (L.wood === 'sakura') { wfx.haze = 7; fx.tint = 'sakura'; fx.tintT = 5; }
+    else if (L.wood === 'cone') { Sound.noise(0.25, 'bandpass', 900, 0.35, 0.8); Sound.crackle(2); }
+    else if (L.wood === 'drift') { fx.tint = 'drift'; fx.tintT = 9; }
+    else if (L.wood === 'oak') wfx.slow = Math.min(60, wfx.slow + 14);
+    else if (L.wood === 'bamboo' && wfx.pops.length < 4) wfx.pops.push(rnd(0.9, 1.6));
+  });
+  BURN_MUL.push(() => (wfx.slow > 0 ? 0.55 : 1));
+  HOOKS.update.push((dt) => {
+    if (fx.tintT > 0) fx.tintT -= dt;
+    if (wfx.slow > 0) wfx.slow -= dt;
+    if (wfx.crack > 0) { // 杉: パチパチ
+      wfx.crack -= dt;
+      if (Math.random() < dt * 15) Sound.crackle(1.7);
+      if (Math.random() < dt * 9) addSpark(cx + rnd(-24, 24) * U, baseY - rnd(6, 40) * U, rnd(-60, 60) * U, -rnd(80, 190) * U, rnd(0.5, 1.2), rnd(1, 2) * U, [255, 226, 150], 60);
+    }
+    if (wfx.haze > 0) { // 桜: 淡いもや
+      wfx.haze -= dt;
+      if (Math.random() < dt * 5 && hazes.length < 26) hazes.push({ x: cx + rnd(-30, 30) * U, y: baseY - flameH * rnd(0.3, 0.8), vx: rnd(-14, 14) * U, vy: -rnd(8, 20) * U, age: 0, life: rnd(4, 7), size: rnd(26, 44) * U });
+    }
+    for (let i = hazes.length - 1; i >= 0; i--) {
+      const p = hazes[i];
+      p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.age >= p.life) hazes.splice(i, 1);
+    }
+    for (let i = wfx.pops.length - 1; i >= 0; i--) { // 竹: 遅れてはぜる
+      if ((wfx.pops[i] -= dt) > 0) continue;
+      wfx.pops.splice(i, 1);
+      emberBurst(cx, baseY - 14 * U, 26, 1.3); flare = Math.min(0.9, flare + 0.3);
+      Sound.noise(0.12, 'bandpass', 1400, 0.8, 1.4); Sound.tone(220, 70, 0.12, 0.35);
+      haptic(18);
+    }
+  });
+  HOOKS.front.push(() => {
+    for (const p of hazes) { const k = p.age / p.life; blob([255, 196, 214], p.x, p.y, p.size * (1 + k * 1.6), Math.sin(k * Math.PI) * 0.13); }
+  });
+  const woodLabel = () => '薪：' + (WMAP[S.woodSel] ? WMAP[S.woodSel].name : 'おまかせ');
+  const chipWood = addChip('chipWood', woodLabel(), () => {
+    const order = ['random'].concat(WOODS.map((w) => w.id));
+    S.woodSel = order[(order.indexOf(S.woodSel) + 1) % order.length];
+    chipWood.textContent = woodLabel(); save();
+  });
+  BOOK_PAGES.push({ id: 'wood', label: '薪', render: (pane) => cardPage(pane, 'wood', '薪', WOODS.map((w) => ({
+    id: w.id, name: w.name, glyph: w.glyph, css: orbOf(w.col), rec: S.wood[w.id], desc: w.desc, hint: 'まだくべたことのない薪。',
+  })), '本') });
+  for (const w of WOODS) {
+    FX['wood-' + w.id] = () => { const n = S.totalLogs; wfx.forced = w; wfx.preview = true; lastThrow = 0; throwLog(cx); wfx.forced = null; wfx.preview = false; S.totalLogs = n; };
+  }
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
