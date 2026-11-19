@@ -79,6 +79,7 @@
   const run = (name, a, b) => { for (const fn of HOOKS[name]) fn(a, b); };
   const TRIG = {}, BUSY = {}, FX = {}, TAP_GUARD = [], BURN_MUL = [], RARE_MUL = [];
   const opened = (k) => !S.open || S.open[k] !== false; // 少しずつひらく（まだひらいていない機能はボタンを見せない）
+  const SET_END = [], PREP = [], HOWTO = [], NEWS = [];
   const BOOK_PAGES = [], SET_ROWS = [], SET_TOP = [], STATS = [], REC_ROWS = [], AWAY_LINES = [];
   let secAcc = 0;
   HOOKS.update.push((dt, real) => { secAcc += real; if (secAcc >= 1) { secAcc = Math.min(1, secAcc - 1); run('sec'); } }); // 1秒に1回でよい処理はここに集める
@@ -1108,6 +1109,7 @@
     const tight = vis.length >= 4 || (chipMenu && chipMenu.length >= 5);
     for (const c of vis) { const t = c.label(tight); if (c.el.textContent !== t) c.el.textContent = t; }
     $('chips').classList.toggle('tight', !!tight);
+    $('chips').classList.toggle('menu', !!chipMenu);
   }
   HOOKS.sec.push(syncChips);
   HOOKS.boot.push(syncChips);
@@ -1141,16 +1143,17 @@
   let bookPage = 'rare';
   function renderBook() {
     const pane = $('paneBook'); pane.textContent = '';
-    if (BOOK_PAGES.length > 1) {
+    const pages = BOOK_PAGES.filter((pg) => !pg.show || pg.show());
+    if (pages.length > 1) {
       const seg = el('div', 'seg pages');
-      for (const pg of BOOK_PAGES) {
+      for (const pg of pages) {
         const b = el('button', pg.id === bookPage ? 'on' : '', pg.label);
         b.addEventListener('click', () => { bookPage = pg.id; renderBook(); $('sheetBody').scrollTop = 0; });
         seg.appendChild(b);
       }
       pane.appendChild(seg);
     }
-    (BOOK_PAGES.find((pg) => pg.id === bookPage) || BOOK_PAGES[0]).render(pane);
+    (pages.find((pg) => pg.id === bookPage) || pages[0]).render(pane);
   }
   BOOK_PAGES.push({ id: 'rare', label: '出来事', render: renderRares });
   function renderRares(pane) {
@@ -1232,6 +1235,7 @@
     });
     pane.appendChild(wipe);
     pane.appendChild(el('p', 'note', '課金・広告・通信は一切ありません。記録はこの端末のブラウザ内（localStorage）にだけ保存されます。'));
+    for (const fn of SET_END) fn(api);
   }
   $('btnBook').addEventListener('click', () => openSheet('book'));
   $('btnSet').addEventListener('click', () => openSheet('set'));
@@ -1360,7 +1364,7 @@
     save();
   }
   addChip('chipWood', woodLabel, woodCycle, () => opened('wood'));
-  BOOK_PAGES.push({ id: 'wood', label: '薪', render: (pane) => cardPage(pane, 'wood', '薪', WOODS.map((w) => ({
+  BOOK_PAGES.push({ id: 'wood', label: '薪', show: () => opened('wood'), render: (pane) => cardPage(pane, 'wood', '薪', WOODS.map((w) => ({
     id: w.id, name: w.name, glyph: w.glyph, css: orbOf(w.col), rec: S.wood[w.id], desc: w.desc, hint: 'まだくべたことのない薪。',
   })), '本') });
   for (const w of WOODS) {
@@ -1450,7 +1454,7 @@
   }
   const chipRoast = addChip('chipRoast', 'あぶる', roastMenu, () => opened('roast') && (roast.can || ROAST_ALSO.some((fn) => fn())));
   CHIP_OFF.push(() => roast.on);
-  BOOK_PAGES.push({ id: 'roast', label: 'あぶり', render: (pane) => cardPage(pane, 'roast', 'あぶり', Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
+  BOOK_PAGES.push({ id: 'roast', label: 'あぶり', show: () => opened('roast'), render: (pane) => cardPage(pane, 'roast', 'あぶり', Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
     id: id + '-' + res, name: RESULTS[res][0] + ROASTS[id].name, glyph: ROASTS[id].glyph, css: orbOf(roastColor(id, { raw: 0.2, good: 0.75, perfect: 0.86, burnt: 1.2 }[res])),
     rec: S.roast[id + '-' + res], desc: { raw: 'まだ早かった。中は冷たい。', good: 'いい焼き色。ふつうにおいしい。', perfect: 'これ以上ない焼き加減。', burnt: '炭になった。これも思い出。' }[res],
     hint: '火であぶり、引き上げるタイミングで仕上がりが変わる。',
@@ -2373,6 +2377,82 @@
   STATS.push((stat) => stat('おまかせでくべた薪', `${S.watchLogs.toLocaleString('ja-JP')}本`));
   FX.watch = () => watchStart(15);
   FX['watch-end'] = () => watchStop(true);
+
+  // ================= はじめは火とボタンだけ（少しずつひらく） =================
+  // ひらく前でも機能の中身（確率など）は同じ。ボタンが見えないだけ。すでに遊んでいる人は最初から全部ひらく
+  const OPENS = [
+    ['wood',   '薪の種類', () => S.totalLogs >= 10],
+    ['roast',  'あぶる',   () => S.totalLogs >= 20 && S.peak >= 20],
+    ['watch',  'ながめる', () => S.totalLogs >= 30],
+    ['shiori', 'しおり',   () => S.totalLogs >= 30],
+    ['photo',  '写真',     () => S.totalLogs >= 50],
+    ['stack',  '組み方',   () => S.totalLogs >= 100],
+    ['ember',  '熾',       () => (S.ember || 0) > 10],
+  ];
+  def('peak', () => (S.totalLogs >= 20 ? 100 : S.fuel)); // これまでに届いたいちばん大きな火力
+  def('open', () => { const all = S.totalLogs >= 30 || Object.keys(S.wood).length > 0; return Object.fromEntries(OPENS.map(([k]) => [k, all])); });
+  def('view', () => 'full', true);
+  def('news2', () => false);
+  CHECK.peak = V.num(0, 100); CHECK.open = V.rec(() => OPENS.map(([k]) => k), V.bool); CHECK.news2 = V.bool; CHECK_SET.view = V.oneOf(['full', 'slim']);
+  // 静かなトーストを、間をあけて順に出す
+  const quietToasts = [];
+  let quietAt = 0;
+  function quietToast(title, sub, gap) { if (quietToasts.length < 12) quietToasts.push([title, sub, gap || 4000]); }
+  HOOKS.sec.push(() => {
+    if (S.fuel > S.peak) { S.peak = S.fuel; dirty = true; }
+    for (const [k, name, ok] of OPENS) {
+      if (S.open[k] || !ok()) continue;
+      S.open[k] = true; save(); syncChips();
+      quietToast(`「${name}」ができるようになりました`, '', 20000); // 重なったら20秒あけて順に
+    }
+    if (quietToasts.length && performance.now() >= quietAt && !app.classList.contains('toasting') && !hid.busy) {
+      const [title, sub, gap] = quietToasts.shift();
+      quietAt = performance.now() + gap;
+      toast('', title, sub, 3600);
+    }
+  });
+  // すっきり表示: チップ・コンボ・熾・上部の天気やタイマーの文字を隠す。隠した機能は設定の「火のしたく」から使える
+  const applyView = () => app.classList.toggle('slim', S.set.view === 'slim');
+  HOOKS.boot.push(applyView);
+  SET_TOP.push(({ row, seg }) => row('表示', seg(S.set.view, [['full', 'ふつう'], ['slim', 'すっきり']], (v) => { S.set.view = v; applyView(); save(); })));
+  const mini = (label, fn) => { const b = el('button', 'mini', label); b.addEventListener('click', () => { Sound.unlock(); fn(); }); return b; };
+  const few = (...btns) => { const d = el('div', 'few'); d.append(...btns); return d; };
+  PREP.push(({ row }) => { if (opened('wood')) row('薪の種類', mini(woodLabel(true), () => { woodCycle(); renderSet(); })); });
+  PREP.push(({ row }) => {
+    if (!opened('watch')) return;
+    row('ながめる', watching() ? mini('やめる', () => { watchStop(false); renderSet(); }) : few(...[15, 30, 60].map((m) => mini(`${m}分`, () => { closeSheet(); watchStart(m); })))).classList.add('stack');
+  });
+  PREP.push(({ row }) => { if (opened('roast') && (roast.can || ROAST_ALSO.some((fn) => fn()))) row('あぶる', mini('えらぶ', () => { closeSheet(); roastMenu(); })); });
+  PREP.push(({ row }) => { if (opened('photo')) row('写真', mini('写真モードへ', () => { closeSheet(); photoEnter(); })); });
+  SET_ROWS.unshift((api) => {
+    if (S.set.view !== 'slim') return;
+    api.head('火のしたく');
+    for (const fn of PREP) fn(api);
+  });
+  // あそびかた（ひらいた機能だけ載せる）
+  HOWTO.push([null, '画面のどこか、または「くべる」をタップで薪を1本。長押しで連続。火は時間とともに小さくなり、ボタンの外周の輪が今の火力です。']);
+  HOWTO.push([null, '下のボタン：図鑑（出会った出来事）／空（朝と夜）／音（初期はOFF）／設定。アプリを閉じても熾火は消えません。']);
+  HOWTO.push(['wood', '薪：チップをタップすると種類が変わります。燃え方がそれぞれ違います。']);
+  HOWTO.push(['roast', 'あぶる：串を火にかざし、いい焼き色になったら画面をタップ。']);
+  HOWTO.push(['watch', 'ながめる：火の番をおまかせして、ただ眺めます。画面をタップすると操作にもどれます。']);
+  HOWTO.push(['photo', '写真：UIを隠します。もう一度タップで、その景色を画像に残せます。']);
+  SET_END.push(({ pane }) => {
+    const d = el('details', 'howto'); d.appendChild(el('summary', '', 'あそびかた'));
+    for (const [k, text] of HOWTO) if (!k || opened(k)) d.appendChild(el('p', '', text));
+    pane.appendChild(d);
+  });
+  // アップデート後の最初の起動で1回だけ（はじめての人には出さない）
+  NEWS.push(() => '演出のつよさを「しずか／にぎやか」から選べます。');
+  NEWS.push(() => '「ながめる」で、何もしなくても火が続きます。');
+  NEWS.push(() => '設定から、記録を書き出して手元に残せます。');
+  HOOKS.boot.push(() => {
+    if (S.news2 || hid.quietBoot) return;
+    S.news2 = true; save();
+    if (S.totalLogs > 0) setTimeout(() => showNote('あたらしくなりました', NEWS.map((fn) => fn()).filter(Boolean), { ms: 24000 }), 1600);
+  });
+  FX.news = () => showNote('あたらしくなりました', NEWS.map((fn) => fn()).filter(Boolean), { ms: 24000 });
+  FX['open-all'] = () => { for (const [k] of OPENS) S.open[k] = true; syncChips(); };
+  FX['open-none'] = () => { for (const [k] of OPENS) S.open[k] = false; syncChips(); };
 
   // ================= 起動 =================
   let lastT = 0, halted = false;

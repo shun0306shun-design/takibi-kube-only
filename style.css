@@ -318,6 +318,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #app.watching:not(.peek) #bar button, #app.watching:not(.peek) #chips .chip { pointer-events: none; }
 #app.watching:not(.peek) #hint { animation: none; }
 
+/* ---- すっきり表示・火のしたく・あそびかた ---- */
+#app.slim #chips:not(.menu), #app.slim #combo, #app.slim #wx, #app.slim #emberDots { display: none; }
+.mini { height: 38px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: transparent; font-size: 13px; letter-spacing: .06em; white-space: nowrap; }
+.few { display: flex; gap: 8px; }
+.few .mini { flex: 1; }
+.howto { margin: 14px 4px 4px; font-size: 12.5px; line-height: 1.8; color: var(--dim); }
+.howto summary { height: 44px; line-height: 44px; font-size: 14px; letter-spacing: .14em; color: var(--ink); }
+.howto p { margin: 0 0 8px; }
+
 /* ---- 横向きは非対応 ---- */
 #rotate {
   display: none; position: absolute; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; place-items: center;
