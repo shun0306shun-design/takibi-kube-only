@@ -2086,7 +2086,7 @@
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), real: (id) => trigger(id, true), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
+    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
       counts: () => ({ flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
