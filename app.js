@@ -1358,6 +1358,105 @@
   }))), '回') });
   for (const id of Object.keys(ROASTS)) FX['roast-' + id] = () => roastStart(id, true);
 
+  // ================= 訪問者 =================
+  // 火のそばに来て、しばらく座って、去っていく。火が大きいほど来やすい（確率 × 0.4〜1.0）
+  const bigFire = () => 0.4 + 0.6 * S.fuel / 100;
+  const VISITORS = [
+    { id: 'kitsune',  name: 'キツネ',   star: 1, glyph: '狐', orb: ['#ffe9c8', '#f08a2c', '#8a3c0c'], sky: 'night', p: 0.012,
+      desc: '森から出てきて、火のそばで丸くなる。目が合うと、そっぽを向く。', hint: '夜、火が大きいほど来やすい。' },
+    { id: 'neko',     name: '猫',       star: 1, glyph: '猫', orb: ['#f2f2f6', '#8c8c9c', '#3c3c4a'], sky: 'day', p: 0.012,
+      desc: 'どこからか来て、いちばん暖かい場所をとる。', hint: '朝、火が大きいほど来やすい。' },
+    { id: 'fukurou',  name: 'フクロウ', star: 2, glyph: '梟', orb: ['#f4e6cc', '#a8804c', '#4a3018'], sky: 'night', p: 0.005,
+      desc: '切り株にとまって、火をじっと見ている。ときどき、ホーと鳴く。', hint: '夜だけ。静かに火を守っていると…。' },
+    { id: 'tabibito', name: '旅人',     star: 2, glyph: '旅', orb: ['#dfeef0', '#4f8794', '#1c3a44'], p: 0.004,
+      desc: '「少し、あたらせてください」。手をかざして、黙って火を見て、礼を言って去る。', hint: '夜も朝も。火が大きいほど来やすい。' },
+    { id: 'shika',    name: '白い鹿',   star: 3, glyph: '鹿', orb: ['#ffffff', '#dfe6f2', '#8a96b0'], p: 0.0012,
+      desc: '森の奥に立つ、真っ白な鹿。こちらを見て、音もなく消える。', hint: '森の奥に、ごくまれに…。' },
+  ];
+  for (const v of VISITORS) {
+    addRare({ ...v, on: 'amb', kind: 'visit', minFuel: 20, pf: bigFire });
+    TRIG[v.id] = () => {
+      fx.visitor = { kind: v.id, age: 0, stay: v.id === 'shika' ? 14 : rnd(22, 34) };
+      if (v.id === 'fukurou') { Sound.tone(340, 300, 0.4, 0.07, 0.6, 'triangle'); Sound.tone(330, 290, 0.5, 0.07, 1.2, 'triangle'); }
+      else Sound.tone(520, 620, 0.25, 0.05);
+    };
+  }
+  fx.visitor = null;
+  BUSY.visit = () => !!fx.visitor;
+  HOOKS.update.push((dt) => {
+    const v = fx.visitor;
+    if (!v) return;
+    v.age += dt;
+    if (v.kind === 'fukurou' && Math.random() < dt * 0.12) { Sound.tone(340, 300, 0.4, 0.06, 0, 'triangle'); Sound.tone(330, 290, 0.5, 0.06, 0.6, 'triangle'); }
+    if (v.age > v.stay + 3) fx.visitor = null;
+  });
+  const E = (x, y, rx, ry, rot) => { g.beginPath(); g.ellipse(x, y, rx, ry, rot || 0, 0, TAU); g.fill(); };
+  const tri = (x1, y1, x2, y2, x3, y3) => { g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.lineTo(x3, y3); g.closePath(); g.fill(); };
+  function drawVisitor(deerPass, day) {
+    const v = fx.visitor;
+    if (!v || (v.kind === 'shika') !== deerPass) return;
+    const k = clamp(v.age / 2.6, 0, 1) * clamp((v.stay + 3 - v.age) / 2.6, 0, 1), e = k * k * (3 - 2 * k);
+    const dark = 0.34 * (1 - day), sh = (c) => rgb(mix(c, [16, 14, 30], dark));
+    const blink = Math.sin(T * 1.3 + 2) > 0.985 ? 0.15 : 1;
+    g.save();
+    g.globalAlpha = e;
+    if (v.kind === 'shika') { // 森の奥に立つ
+      g.globalCompositeOperation = 'lighter';
+      blob([210, 225, 255], W * 0.25, horizon - 6 * U, 62 * U, 0.3 * e);
+      g.globalCompositeOperation = 'source-over'; g.globalAlpha = e;
+      g.translate(W * 0.25, horizon + 22 * U); g.scale(U * 0.95, U * 0.95);
+      g.fillStyle = sh([246, 247, 252]);
+      for (const lx of [-13, -8, 9, 14]) g.fillRect(lx, -22, 2.6, 22);
+      E(0, -27, 19, 9); // 胴
+      g.beginPath(); g.moveTo(11, -32); g.lineTo(19, -48); g.lineTo(25, -46); g.lineTo(19, -24); g.closePath(); g.fill(); // 首
+      E(24, -50, 7.5, 4.6, 0.25); tri(18, -54, 16, -61, 21, -55); // 頭と耳
+      E(-19, -30, 3, 4);
+      g.strokeStyle = sh([236, 238, 246]); g.lineWidth = 1.5; g.lineCap = 'round';
+      g.beginPath();
+      for (const d of [-1, 1]) { g.moveTo(21, -54); g.lineTo(21 + d * 4, -66); g.lineTo(21 + d * 9, -72); g.moveTo(21 + d * 4, -66); g.lineTo(21 + d * 1, -74); g.moveTo(21 + d * 6.5, -69); g.lineTo(21 + d * 11, -66); }
+      g.stroke();
+      g.fillStyle = '#26303c'; E(26, -51, 1.1, 1.1 * blink);
+      g.restore(); return;
+    }
+    const owl = v.kind === 'fukurou';
+    if (owl) g.translate(cx + 128 * U, baseY + 4 * U); else g.translate(cx + (120 + (1 - e) * 46) * U, baseY + 36 * U);
+    g.scale(U * 1.25, U * 1.25);
+    if (owl) { // 切り株ごと現れて、上から舞い降りる
+      g.fillStyle = sh([70, 50, 34]); g.fillRect(-9, -2, 18, 20); g.fillStyle = sh([150, 118, 80]); E(0, -2, 9, 3.4);
+      g.translate(0, -(1 - e) * 70);
+      g.fillStyle = sh([122, 92, 58]); E(0, -15, 10.5, 13.5);
+      tri(-9, -25, -7, -32, -3, -26); tri(9, -25, 7, -32, 3, -26);
+      g.fillStyle = sh([208, 184, 140]); E(0, -18, 8.4, 7.4); E(0, -8, 5.6, 6);
+      g.fillStyle = '#ffd24a'; E(-3.6, -19, 3, 3 * blink); E(3.6, -19, 3, 3 * blink);
+      g.fillStyle = '#1a1208'; E(-3.6, -19, 1.4, 1.4 * blink); E(3.6, -19, 1.4, 1.4 * blink);
+      g.fillStyle = sh([230, 170, 60]); tri(-1.4, -16.4, 1.4, -16.4, 0, -13.4);
+    } else if (v.kind === 'kitsune' || v.kind === 'neko') {
+      const fox = v.kind === 'kitsune', body = fox ? [232, 128, 40] : [112, 112, 126], pale = fox ? [255, 244, 226] : [196, 196, 206];
+      g.fillStyle = sh(body);
+      if (fox) { g.save(); g.rotate(-0.5 + Math.sin(T * 1.4) * 0.08); E(15, -2, 6.5, 15, 0.5); g.fillStyle = sh(pale); E(20.5, -11.5, 4, 5.5, 0.5); g.restore(); g.fillStyle = sh(body); }
+      else { g.strokeStyle = sh(body); g.lineWidth = 3.4; g.lineCap = 'round'; g.beginPath(); g.moveTo(8, -3); g.quadraticCurveTo(22, -2, 18, -15 + Math.sin(T * 1.8) * 2); g.stroke(); }
+      E(0, -11, 10, 13); // 胴
+      g.fillStyle = sh(pale); E(-4.5, -9, 4.4, 8.5);
+      g.fillStyle = sh(body); E(-5, -28, 8, 7.2); // 頭
+      tri(-11, -32, -10.5, -42, -5, -34); tri(-1, -34, 1.5, -42, 3, -31);
+      if (fox) { g.fillStyle = sh(pale); tri(-12, -29, -19, -25, -9, -23.5); g.fillStyle = '#20140c'; E(-18.2, -25.2, 1.3, 1.1); }
+      g.fillStyle = fox ? '#20140c' : (day < 0.5 ? '#ffe36a' : '#2a2a30'); E(-8.4, -29, 1.3, 1.5 * blink); if (!fox) E(-3.2, -29, 1.3, 1.5 * blink);
+    } else { // 旅人
+      g.fillStyle = sh([70, 52, 36]); rr(12, -16, 13, 17, 4); g.fill(); // 荷物
+      g.fillStyle = sh([58, 92, 104]);
+      g.beginPath(); g.moveTo(-10, 2); g.lineTo(-7, -26); g.quadraticCurveTo(0, -33, 7, -26); g.lineTo(11, 2); g.closePath(); g.fill(); // 外套
+      g.strokeStyle = sh([58, 92, 104]); g.lineWidth = 4.2; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(-5, -20); g.lineTo(-17, -14 + Math.sin(T * 1.1) * 1); g.stroke(); // 火にかざす手
+      g.fillStyle = sh([236, 200, 164]); E(-18, -14 + Math.sin(T * 1.1) * 1, 2.2, 2.2); E(-1, -34, 6, 6.4);
+      g.fillStyle = sh([190, 60, 50]); rr(-7, -30, 13, 4.4, 2); g.fill(); // 襟巻き
+      g.fillStyle = sh([198, 168, 106]); E(-1, -39, 13, 3.2); E(-1, -42, 6.4, 4.4); // 笠
+    }
+    g.restore();
+    if (!owl || e > 0.9) { g.globalCompositeOperation = 'lighter'; blob(PAL[palName()].glow, cx + 112 * U, baseY + 14 * U, 34 * U, 0.16 * e * lit * (1 - 0.5 * day)); g.globalCompositeOperation = 'source-over'; }
+  }
+  HOOKS.ground.push((day) => drawVisitor(true, day));
+  HOOKS.front.push((day) => drawVisitor(false, day));
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(now) {
