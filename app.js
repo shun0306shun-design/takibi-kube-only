@@ -12,6 +12,11 @@
   const rgb = (c) => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
   const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
   const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+  // 時間で進むものは、この時計の「時刻の差」から計算する。端末の時計がずれても壊れないよう、差は 0〜30日に丸める
+  let clockSkew = 0; // ?debug の takibi.skip(分) で進められる
+  const now = () => Date.now() + clockSkew;
+  const span = (from, to) => clamp((to - from) / 1000, 0, 30 * 86400);
+  const drop = (c) => { if (c) c.width = c.height = 0; }; // 使い終えたキャンバスのメモリをすぐ手放す（iOS は上限が厳しい）
   function seeded(s) {
     return () => {
       s = (s + 0x6d2b79f5) | 0;
@@ -108,7 +113,7 @@
     if (S.fuel <= 0 || sec <= 0) return;
     S.fuel = Math.max(0, (S.fuel + BURN_A / BURN_B) * Math.exp(-BURN_B * sec) - BURN_A / BURN_B);
   }
-  const awaySec = (Date.now() - S.lastSeen) / 1000, awayFuel0 = S.fuel;
+  const awaySec = span(S.lastSeen, Date.now()), awayFuel0 = S.fuel;
   decayAway(awaySec);
 
   // ================= 音（WebAudioで合成。素材ファイルなし） =================
@@ -353,6 +358,7 @@
     cx = W / 2;
     baseY = Math.round(Math.min(H * 0.7, H - 196));
     horizon = Math.round(baseY - H * 0.1);
+    drop(layerN); drop(layerD); drop(fBuf && fBuf.c); drop(sBuf && sBuf.c); drop(moonCv);
     layerN = makeLayer(false); layerD = makeLayer(true);
     fBuf = makeBuf(cx - 180 * U, baseY - 340 * U, 360 * U, 380 * U, 0.5);
     sBuf = makeBuf(cx - 215 * U, baseY - 580 * U, 430 * U, 600 * U, 0.3);
@@ -380,6 +386,10 @@
   let T = 0;                 // 経過秒
   let I = 0, lit = 0, flare = 0, flick = 1, flameH = 0;
   let dayTarget = 0, dayness = 0, skyCheck = 0;
+  // 軽さの見張り: 重い端末では粒の「出る量」だけを自動で絞る（100% → 70% → 50%）。火力・抽選・記録には関わらない
+  const perf = { q: 0, forced: -1, avg: 16.7, work: 6, over: 0, under: 0, wait: 20, lastUp: 0, fps: 60 };
+  const Q = () => [1, 0.7, 0.5][perf.forced >= 0 ? perf.forced : perf.q];
+  const LOW_RATE = []; // 毎秒30回に落としてよい場面
   const flames = [], sparks = [], smokes = [], flying = [], landed = [];
   const rockets = [], fw = [], shoots = [];
   const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
@@ -576,7 +586,7 @@
     for (const c of clouds) { c.x += c.sp * dt; if (c.x - c.w > W) c.x = -c.w; }
 
     // --- 炎 ---
-    flameAcc += (lit * (46 + 190 * I) + (1 - lit) * 6) * dt;
+    flameAcc += (lit * (46 + 190 * I) + (1 - lit) * 6) * dt * Q();
     while (flameAcc >= 1) { flameAcc--; if (flames.length < 320) spawnFlame(); }
     const wind = Math.sin(T * 0.7) * 0.6 + Math.sin(T * 1.9 + 1.3) * 0.4;
     for (let i = flames.length - 1; i >= 0; i--) {
@@ -590,7 +600,7 @@
     }
 
     // --- 火の粉 ---
-    sparkAcc += (0.5 + lit * (2 + 11 * I)) * dt;
+    sparkAcc += (0.5 + lit * (2 + 11 * I)) * dt * Q();
     while (sparkAcc >= 1) {
       sparkAcc--;
       const pal = PAL[palName()];
@@ -608,7 +618,7 @@
     }
 
     // --- 煙 ---
-    smokeAcc += (1.2 + lit * (2 + 5 * I)) * dt;
+    smokeAcc += (1.2 + lit * (2 + 5 * I)) * dt * Q();
     while (smokeAcc >= 1) {
       smokeAcc--;
       if (smokes.length < 60) smokes.push({
@@ -1186,7 +1196,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { hiddenAt = Date.now(); endFeed(); save(); Sound.pause(true); }
     else {
-      if (hiddenAt) { const sec = (Date.now() - hiddenAt) / 1000, f0 = S.fuel; decayAway(sec); run('back', sec, f0); }
+      if (hiddenAt) { const sec = span(hiddenAt, Date.now()), f0 = S.fuel; decayAway(sec); run('back', sec, f0); }
       hiddenAt = 0; lastT = 0; Sound.pause(false);
     }
   });
@@ -1526,7 +1536,7 @@
     // 降るもの・舞うもの（数に上限あり）
     const calm = k === 'clear';
     wxs.acc += dt;
-    const spawn = (rate, make) => { let n = rate * dt + Math.random(); n = n >= 1 ? Math.floor(n) : 0; while (n-- > 0 && wps.length < 150) wps.push(make()); };
+    const spawn = (rate, make) => { let n = rate * Q() * dt + Math.random(); n = n >= 1 ? Math.floor(n) : 0; while (n-- > 0 && wps.length < 150) wps.push(make()); };
     if (wxs.rain > 0.05) spawn(110 * wxs.rain, () => ({ t: 'rain', x: rnd(-30, W + 80), y: -20, vx: -130 * U, vy: rnd(760, 980) * U, len: rnd(12, 22) * U, a: rnd(0.18, 0.4) }));
     if (wxs.snow > 0.05) spawn(22 * wxs.snow, () => ({ t: 'snow', x: rnd(-10, W + 10), y: -6, vx: 0, vy: rnd(36, 78) * U, s: rnd(1.2, 2.8) * U, ph: rnd(0, TAU), a: rnd(0.6, 1) }));
     if (calm && se === 'spring') spawn(1.4, () => ({ t: 'petal', x: rnd(-10, W + 40), y: -8, vx: -rnd(10, 30) * U, vy: rnd(26, 46) * U, s: rnd(2.6, 4) * U, ph: rnd(0, TAU), a: 0.9, c: pick([[255, 196, 214], [255, 220, 230], [250, 170, 196]]) }));
@@ -1577,7 +1587,7 @@
     if (day > 0) { g.globalAlpha = wxs.ground * day; g.drawImage(get('d', true), 0, 0, W, H); }
     g.globalAlpha = 1;
   });
-  HOOKS.resize.push(() => { wxs.layers = {}; wps.length = 0; flies.length = 0; });
+  HOOKS.resize.push(() => { for (const k of Object.keys(wxs.layers)) drop(wxs.layers[k]); wxs.layers = {}; wps.length = 0; flies.length = 0; });
   HOOKS.top.push((day) => {
     if (wxs.rain > 0.01) { g.globalAlpha = 0.2 * wxs.rain; g.fillStyle = '#04060e'; g.fillRect(-9, -9, W + 18, H + 18); }
     g.lineCap = 'round'; g.lineWidth = Math.max(1, 1.1 * U);
@@ -2064,17 +2074,33 @@
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
-  function frame(now) {
+  function frame(ts) {
     if (halted) { lastT = 0; return; } // 描画ループを完全に止める（電池を使わない）
     requestAnimationFrame(frame);
-    const real = lastT ? Math.min(0.05, (now - lastT) / 1000) : 0.016;
-    lastT = now;
+    // 120Hz の端末でも毎秒60回まで。シートを開いている間や眺めるだけの場面は毎秒30回
+    const low = app.classList.contains('sheet') || LOW_RATE.some((fn) => fn());
+    if (lastT && ts - lastT < (low ? 31 : 15)) return;
+    const gap = lastT ? ts - lastT : 16.7, real = Math.min(0.05, gap / 1000);
+    lastT = ts;
     let scale = 1;
     if (fx.slowT > 0) { fx.slowT -= real; scale = 0.3; } // ★3の一瞬のスローモーション
     const dt = real * scale;
     T += dt;
+    const t0 = performance.now();
     update(dt, real); draw();
+    if (!low && gap < 200) watchPerf(gap, performance.now() - t0, real);
   }
+  // フレーム間隔のならし平均が 22ms を3秒超えたら1段落とし、余裕のある状態が20秒続いたら1段戻す。切り替えは何も表示しない
+  function watchPerf(gap, work, real) {
+    perf.avg += (gap - perf.avg) * 0.05; perf.work += (work - perf.work) * 0.05; perf.fps = 1000 / perf.avg;
+    if (perf.avg > 22) { perf.under = 0; perf.over += real; } else { perf.over = 0; perf.under = perf.avg < 18.5 && perf.work < 14 ? perf.under + real : 0; }
+    if (perf.over > 3 && perf.q < 2) {
+      perf.q++; perf.over = 0;
+      perf.wait = performance.now() - perf.lastUp < 30000 ? Math.min(320, perf.wait * 2) : 20; // 戻してすぐまた重くなる端末では、戻すのを急がない
+    } else if (perf.under > perf.wait && perf.q > 0) { perf.q--; perf.under = 0; perf.lastUp = performance.now(); }
+  }
+  FX['q-low'] = () => { perf.forced = 2; };
+  FX['q-auto'] = () => { perf.forced = -1; };
 
   resize();
   dayTarget = skyTarget(); dayness = dayTarget;
@@ -2087,7 +2113,8 @@
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
     window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
-      counts: () => ({ flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
+      skip: (min) => { const sec = min * 60, f0 = S.fuel; clockSkew += sec * 1000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
+      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
 })();
