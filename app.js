@@ -1136,6 +1136,15 @@
   HOOKS.sec.push(syncChips);
   HOOKS.boot.push(syncChips);
   let noteTimer = 0;
+  // 1回だけの案内どうしが上書きし合わないよう、前のカードが閉じてから順に出す
+  const noteQueue = [];
+  function noteLater(title, lines, opt) { noteQueue.push([title, lines, opt || {}]); }
+  HOOKS.sec.push(() => {
+    if (!noteQueue.length || app.classList.contains('noting') || app.classList.contains('sheet') || hid.busy) return;
+    const [title, lines, opt] = noteQueue.shift();
+    if (opt.onShow) opt.onShow();
+    showNote(title, typeof lines === 'function' ? lines() : lines, opt);
+  });
   function closeNote() { clearTimeout(noteTimer); app.classList.remove('noting'); }
   function showNote(title, lines, opt) {
     opt = opt || {};
@@ -1253,7 +1262,7 @@
       if (Date.now() < wipeArm) {
         const keep = S.set; S = fresh(); S.set = keep; applyDefs(); wipeArm = 0; try { localStorage.removeItem(KEY + '.bak'); } catch (e) { /* 無ければ何もしない */ } selId = null; lastCount = -1;
         fx.flame = null; fx.flameT = 0; save(); syncButtons(); renderSet(); toast('', '記録を消しました', '', 2000);
-      } else { wipeArm = Date.now() + 4000; renderSet(); setTimeout(() => { if (sheetTab === 'set' && app.classList.contains('sheet')) renderSet(); }, 4100); }
+      } else { wipeArm = Date.now() + 4000; renderSet(); setTimeout(() => { if (sheetTab === 'set' && app.classList.contains('sheet') && !recView) renderSet(); }, 4100); } // 書き出し・読み込みの途中では描き直さない（貼りつけた文字を消さない）
     });
     pane.appendChild(wipe);
     pane.appendChild(el('p', 'note', '課金・広告・通信は一切ありません。記録はこの端末のブラウザ内（localStorage）にだけ保存されます。'));
@@ -2322,10 +2331,11 @@
   // iPhone の Safari は、ホーム画面に追加していないサイトの記録を、しばらく開かないと消すことがある。長く遊んだ人に1度だけ知らせる
   def('a2hs', () => false);
   CHECK.a2hs = V.bool;
+  let a2hsQueued = false;
   HOOKS.sec.push(() => {
-    if (S.a2hs || navigator.standalone !== false || S.totalLogs <= 300 || app.classList.contains('noting')) return;
-    S.a2hs = true; save();
-    showNote('記録について', ['ホーム画面に追加すると、記録が消えにくくなります。', '設定から書き出しもできます。'], { ms: 16000 });
+    if (S.a2hs || a2hsQueued || navigator.standalone !== false || S.totalLogs <= 300) return;
+    a2hsQueued = true; // 実際に見せたときに、見せた印を保存する
+    noteLater('記録について', ['ホーム画面に追加すると、記録が消えにくくなります。', '設定から書き出しもできます。'], { ms: 16000, onShow: () => { S.a2hs = true; save(); } });
   });
   FX.a2hs = () => showNote('記録について', ['ホーム画面に追加すると、記録が消えにくくなります。', '設定から書き出しもできます。'], { ms: 16000 });
 
@@ -2479,7 +2489,7 @@
   HOOKS.boot.push(() => {
     if (S.news2 || hid.quietBoot) return;
     S.news2 = true; save();
-    if (S.totalLogs > 0) setTimeout(() => showNote('あたらしくなりました', NEWS.map((fn) => fn()).filter(Boolean), { ms: 24000 }), 1600);
+    if (S.totalLogs > 0) noteLater('あたらしくなりました', () => NEWS.map((fn) => fn()).filter(Boolean), { ms: 24000 });
   });
   FX.news = () => showNote('あたらしくなりました', NEWS.map((fn) => fn()).filter(Boolean), { ms: 24000 });
   FX['open-all'] = () => { for (const [k] of OPENS) S.open[k] = true; syncChips(); };
