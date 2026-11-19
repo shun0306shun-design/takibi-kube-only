@@ -1651,6 +1651,98 @@
     stat('これまでの最長', `${S.streak.best}日`);
   });
 
+  // ================= 寝落ちモード（タイマー） =================
+  // 時間が来るまでに火と音をゆっくり小さくし、最後は熾火と静かな画面にする。保存はしない（その場かぎり）
+  const slp = { end: 0, total: 0, asleep: false, dim: 0, f: 1 };
+  function setSleep(min, sec) {
+    slp.total = sec || min * 60; slp.end = slp.total ? Date.now() + slp.total * 1000 : 0; slp.asleep = false;
+    if (!slp.total) { setStatus('sleep', ''); Sound.setFactor(1); slp.f = 1; }
+    app.classList.remove('asleep');
+  }
+  HOOKS.update.push((dt, real) => {
+    const target = slp.asleep ? 1 : 0;
+    slp.dim += clamp(target - slp.dim, -real * 0.4, real * 0.4);
+    if (!slp.end) return;
+    const left = (slp.end - Date.now()) / 1000;
+    if (left <= 0) { // おやすみなさい
+      slp.end = 0; slp.asleep = true; S.fuel = 0; Sound.setFactor(0); slp.f = 0;
+      setStatus('sleep', 'おやすみなさい'); app.classList.add('asleep');
+      return;
+    }
+    const f = left / slp.total;
+    S.fuel = Math.min(S.fuel, 100 * clamp(f / 0.5, 0, 1));                // 後半で火を絞っていく
+    const vol = clamp(f / 0.7, 0, 1);
+    if (Math.abs(vol - slp.f) > 0.02) { slp.f = vol; Sound.setFactor(vol); } // 音もいっしょに小さく
+    const m = Math.floor(left / 60), s = Math.floor(left % 60);
+    setStatus('sleep', `ねむりまで ${m}:${String(s).padStart(2, '0')}`);
+  });
+  HOOKS.top.push(() => { if (slp.dim > 0.01) { g.globalAlpha = 0.6 * slp.dim; g.fillStyle = '#000'; g.fillRect(-9, -9, W + 18, H + 18); g.globalAlpha = 1; } });
+  TAP_GUARD.push(() => { // 眠ったあとのタップは、起こすだけ
+    if (!slp.asleep) return false;
+    slp.asleep = false; app.classList.remove('asleep'); setStatus('sleep', ''); Sound.setFactor(1); slp.f = 1;
+    return true;
+  });
+  SET_ROWS.push(({ row, seg, head }) => {
+    head('寝落ちモード');
+    const cur = slp.end ? Math.round(slp.total / 60) : 0;
+    row('タイマー', seg(cur, [[0, 'OFF'], [15, '15分'], [30, '30分'], [60, '60分']], (v) => setSleep(v))).classList.add('stack');
+  });
+  FX.sleep = () => setSleep(0, 20);
+
+  // ================= 環境音ミックス =================
+  // 焚き火の音に、川・虫の声・風・雨（天気と連動）を重ねる。音全体が OFF なら何も鳴らない
+  const MIX = [['fire', '焚き火'], ['river', '川'], ['bugs', '虫の声'], ['wind', '風'], ['rain', '雨（雨の日だけ）']];
+  def('mix', () => ({ fire: { on: true, vol: 0.8 }, river: { on: false, vol: 0.5 }, bugs: { on: false, vol: 0.5 }, wind: { on: false, vol: 0.5 }, rain: { on: true, vol: 0.6 } }), true);
+  const amb = { g: null, t: 0, chirp: 0 };
+  Sound.onBuild((ctx, out, buf) => {
+    const layer = (b, filters) => {
+      const s = ctx.createBufferSource(); s.buffer = b; s.loop = true;
+      let node = s;
+      const fs = filters.map(([type, freq, q]) => { const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = freq; if (q) fl.Q.value = q; node.connect(fl); node = fl; return fl; });
+      const trem = ctx.createGain(), gn = ctx.createGain(); gn.gain.value = 0;
+      node.connect(trem); trem.connect(gn); gn.connect(out); s.start(0, Math.random() * 2);
+      return { gn, trem, fs };
+    };
+    const lfo = (freq, depth, param) => { const o = ctx.createOscillator(), d = ctx.createGain(); o.frequency.value = freq; d.gain.value = depth; o.connect(d); d.connect(param); o.start(); };
+    const river = layer(buf.white, [['bandpass', 760, 0.7]]), river2 = layer(buf.white, [['highpass', 2600]]);
+    lfo(0.19, 0.22, river.trem.gain); lfo(0.31, 0.3, river2.trem.gain); river2.gn.disconnect(); river2.gn.gain.value = 0.25; river2.gn.connect(river.gn);
+    const wind = layer(buf.brown, [['bandpass', 430, 1.1]]);
+    lfo(0.07, 190, wind.fs[0].frequency); lfo(0.11, 0.45, wind.trem.gain);
+    const rain = layer(buf.white, [['highpass', 1700], ['lowpass', 7200]]);
+    amb.g = { river: river.gn, wind: wind.gn, rain: rain.gn };
+  });
+  HOOKS.update.push((dt, real) => {
+    if (!Sound.live() || !amb.g) return;
+    const m = S.set.mix, now = Sound.ctx().currentTime;
+    amb.t -= real;
+    if (amb.t <= 0) {
+      amb.t = 0.3;
+      Sound.setFireVol(m.fire.on ? m.fire.vol * 1.25 : 0);
+      amb.g.river.gain.setTargetAtTime(m.river.on ? m.river.vol * 0.2 : 0, now, 0.4);
+      amb.g.wind.gain.setTargetAtTime(m.wind.on ? m.wind.vol * 0.42 : 0, now, 0.4);
+      amb.g.rain.gain.setTargetAtTime(m.rain.on ? m.rain.vol * 0.26 * wxs.rain : 0, now, 0.4);
+    }
+    if (m.bugs.on) { // 虫の声: 高い音を3つずつ、間をおいて
+      amb.chirp -= real;
+      if (amb.chirp <= 0) {
+        amb.chirp = rnd(0.7, 1.6);
+        const f = rnd(4100, 4600), v = 0.035 * m.bugs.vol;
+        for (let i = 0; i < 3; i++) Sound.tone(f, f, 0.05, v, i * 0.075);
+      }
+    }
+  });
+  SET_ROWS.push(({ pane, row, tog, head }) => {
+    head('音のミックス');
+    for (const [id, label] of MIX) {
+      const m = S.set.mix[id], box = el('div', 'mixctl'), sl = el('input');
+      sl.type = 'range'; sl.min = 0; sl.max = 100; sl.value = Math.round(m.vol * 100); sl.setAttribute('aria-label', label + 'の音量');
+      sl.addEventListener('input', () => { m.vol = sl.value / 100; amb.t = 0; dirty = true; });
+      box.append(sl, tog(m.on, (v) => { m.on = v; amb.t = 0; save(); }));
+      row(label, box);
+    }
+    pane.appendChild(el('p', 'note', '下の「音」ボタンが OFF のあいだは、どの音も鳴りません。'));
+  });
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(now) {

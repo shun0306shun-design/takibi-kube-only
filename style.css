@@ -227,6 +227,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .row.stack .seg button { flex: 1; min-width: 0; padding: 0 4px; }
 .row .val { color: var(--dim); font-size: 14px; }
 
+.mixctl { display: flex; align-items: center; gap: 10px; }
+.mixctl input[type=range] { width: 108px; height: 34px; margin: 0; touch-action: none; accent-color: #ffb45e; }
+#app.asleep #hud, #app.asleep #bar, #app.asleep #chips { opacity: .3; transition: opacity 2s; }
+
 /* ---- 横向きは非対応 ---- */
 #rotate {
   display: none; position: absolute; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; place-items: center;
