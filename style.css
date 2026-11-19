@@ -191,6 +191,38 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .danger.arm { background: rgba(200, 50, 30, .3); color: #fff; }
 .note { margin: 14px 4px 4px; font-size: 11px; line-height: 1.8; color: var(--dim); }
 
+/* ---- 追加機能の共通部品 ---- */
+#wx { margin-top: 4px; min-height: 14px; font-size: 11px; letter-spacing: .12em; color: var(--dim); opacity: .9; font-variant-numeric: tabular-nums; }
+#chips {
+  position: absolute; z-index: 2; left: 0; right: 0; bottom: calc(var(--safe-b) + 124px);
+  display: flex; justify-content: center; gap: 8px; pointer-events: none;
+}
+.chip {
+  pointer-events: auto; height: 30px; padding: 0 12px; border-radius: 15px; white-space: nowrap;
+  background: var(--glass); border: 1px solid var(--line); font-size: 12px; letter-spacing: .08em;
+}
+.chip:active { background: rgba(60, 36, 22, .85); }
+.chip[hidden] { display: none; }
+.chip.hot { border-color: rgba(255, 190, 110, .8); color: #ffe3bd; }
+
+#note {
+  position: absolute; z-index: 3; left: 14px; right: 14px; bottom: calc(var(--safe-b) + 168px);
+  padding: 14px 16px 12px; border-radius: 16px; background: rgba(22, 15, 10, .93); border: 1px solid rgba(255, 214, 140, .45);
+  box-shadow: 0 6px 30px rgba(0, 0, 0, .5); font-size: 13px; line-height: 1.8;
+  opacity: 0; transform: translateY(12px); pointer-events: none; transition: opacity .35s, transform .35s;
+}
+#app.noting #note { opacity: 1; transform: none; pointer-events: auto; }
+#note b { display: block; font-weight: 500; font-size: 15px; letter-spacing: .14em; color: #ffdcae; margin-bottom: 4px; }
+#note p { margin: 0; }
+#note img { display: block; width: 46%; margin: 6px auto 8px; border-radius: 8px; border: 1px solid var(--line); }
+#note .btns { display: flex; gap: 8px; margin-top: 10px; }
+#note .btns button { flex: 1; height: 42px; border-radius: 12px; border: 1px solid var(--line); background: transparent; font-size: 13px; letter-spacing: .08em; }
+#note .btns button:first-child:not(:last-child) { background: rgba(255, 150, 60, .2); border-color: rgba(255, 176, 96, .65); color: #ffe3bd; }
+
+.seg.pages { margin: 4px 0 8px; }
+.seg.pages button { flex: 1; }
+.row > span:first-child { padding-right: 10px; }
+
 /* ---- 横向きは非対応 ---- */
 #rotate {
   display: none; position: absolute; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; place-items: center;

@@ -21,11 +21,13 @@
   <header id="hud">
     <div id="stage">熾火</div>
     <div id="count">くべた薪 0本</div>
+    <div id="wx"></div>
   </header>
 
   <div id="toast" role="status" aria-live="polite"><b></b><small></small></div>
   <div id="hint">画面をタップして薪をくべる<br><small>長押しで連続</small></div>
 
+  <div id="chips"></div>
   <nav id="bar">
     <button class="sm" id="btnBook" aria-label="図鑑">
       <i><svg viewBox="0 0 24 24"><path d="M4 5.5c2-1 5-1 8 .5 3-1.5 6-1.5 8-.5v13c-2-1-5-1-8 .5-3-1.5-6-1.5-8-.5z"/><path d="M12 6v13"/></svg><em id="dot"></em></i>
@@ -48,6 +50,7 @@
     </button>
   </nav>
 
+  <div id="note" role="dialog"></div>
   <div id="backdrop"></div>
   <section id="sheet" aria-hidden="true">
     <div id="grab"><span></span></div>

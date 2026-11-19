@@ -64,6 +64,16 @@
   ];
   const RMAP = Object.fromEntries(RARES.map((r) => [r.id, r]));
   const FLAME_IDS = ['blue', 'green', 'purple', 'pink', 'rainbow'];
+  for (const [kind, ids] of Object.entries({ flame: FLAME_IDS, fw: ['hanabi', 'tairin'], sky: ['star', 'meteor'], niji: ['niji'], spirit: ['hinoko', 'tsuyu'] })) {
+    for (const id of ids) RMAP[id].kind = kind;
+  }
+  function addRare(r) { RARES.push(r); RMAP[r.id] = r; }
+  const starStr = (r) => r.stars || '★'.repeat(r.star);
+  // あとから足す機能が差し込む口（更新・描画の各段階、薪を投げた/落ちた、図鑑に新しく載った、起動時）
+  const HOOKS = { update: [], sky: [], ground: [], front: [], top: [], thrown: [], land: [], found: [], resize: [], boot: [] };
+  const run = (name, a, b) => { for (const fn of HOOKS[name]) fn(a, b); };
+  const TRIG = {}, BUSY = {}, FX = {}, TAP_GUARD = [], BURN_MUL = [], RARE_MUL = [];
+  const BOOK_PAGES = [], SET_ROWS = [], STATS = [];
   const STAGES = [[90, '天を焦がす炎'], [65, '大きな焚き火'], [40, '焚き火'], [20, '小さな火'], [5, '種火'], [0, '熾火']];
   const stageOf = (f) => STAGES.find((s) => f >= s[0])[1];
 
@@ -83,6 +93,10 @@
     } catch (e) { return fresh(); }
   }
   let S = loadState();
+  // 新機能の保存項目。古いセーブデータには無いので、足りないときだけ初期値で補う（既存の値には触れない）
+  const DEFS = [];
+  function applyDefs() { for (const [k, make, inSet] of DEFS) { const o = inSet ? S.set : S; if (o[k] === undefined) o[k] = make(); } }
+  function def(key, make, inSet) { DEFS.push([key, make, inSet]); applyDefs(); }
   let dirty = false, saveT = 0;
   function save() {
     try { S.lastSeen = Date.now(); localStorage.setItem(KEY, JSON.stringify(S)); dirty = false; } catch (e) { /* 保存不可でも遊べる */ }
@@ -99,7 +113,8 @@
 
   // ================= 音（WebAudioで合成。素材ファイルなし） =================
   const Sound = (() => {
-    let ctx = null, master, bedG, hissG, white, on = false;
+    let ctx = null, master, bedG, hissG, white, brown, on = false, factor = 1, fireVol = 1;
+    const builders = [];
     function build() {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return false;
@@ -107,7 +122,7 @@
       master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
       const n = ctx.sampleRate * 3, F = 4096;
       white = ctx.createBuffer(1, n, ctx.sampleRate);
-      const brown = ctx.createBuffer(1, n, ctx.sampleRate);
+      brown = ctx.createBuffer(1, n, ctx.sampleRate);
       const w = white.getChannelData(0), b = brown.getChannelData(0), gen = new Float32Array(n + F);
       let last = 0;
       for (let i = 0; i < n + F; i++) {
@@ -125,6 +140,7 @@
       };
       bedG = loop(brown, 'lowpass', 420);
       hissG = loop(white, 'bandpass', 2600, 0.5);
+      for (const fn of builders) fn(ctx, master, { white, brown, loop });
       return true;
     }
     const quiet = (pr) => { if (pr && pr.catch) pr.catch(() => {}); };
@@ -134,7 +150,7 @@
       if (v) {
         if (!ctx && !build()) return;
         if (ctx.state !== 'running') quiet(ctx.resume());
-        master.gain.setTargetAtTime(0.85, ctx.currentTime, 0.15);
+        master.gain.setTargetAtTime(0.85 * factor, ctx.currentTime, 0.15);
       } else if (ctx) {
         master.gain.setTargetAtTime(0, ctx.currentTime, 0.04);
       }
@@ -143,8 +159,8 @@
     function pause(p) { if (!ctx) return; if (p) quiet(ctx.suspend()); else if (on) quiet(ctx.resume()); }
     function level(I, lit) {
       if (!live()) return;
-      bedG.gain.setTargetAtTime(0.04 + 0.3 * I * lit, ctx.currentTime, 0.3);
-      hissG.gain.setTargetAtTime(0.003 + 0.03 * I * lit, ctx.currentTime, 0.3);
+      bedG.gain.setTargetAtTime((0.04 + 0.3 * I * lit) * fireVol, ctx.currentTime, 0.3);
+      hissG.gain.setTargetAtTime((0.003 + 0.03 * I * lit) * fireVol, ctx.currentTime, 0.3);
     }
     function noise(dur, type, f, vol, rate = 1, when = 0) {
       const t = ctx.currentTime + when;
@@ -166,8 +182,14 @@
       o.connect(gn); gn.connect(master); o.start(t); o.stop(t + dur + 0.05);
     }
     return {
-      set, unlock, pause, level,
-      crackle(v = 1) { if (live()) noise(rnd(0.012, 0.06), 'highpass', rnd(1200, 5200), rnd(0.12, 0.45) * v, rnd(0.5, 2)); },
+      set, unlock, pause, level, live,
+      ctx: () => ctx, out: () => master,
+      onBuild(fn) { builders.push(fn); if (ctx) fn(ctx, master, { white, brown }); },
+      setFactor(v) { factor = v; if (on && ctx) master.gain.setTargetAtTime(0.85 * v, ctx.currentTime, 0.4); },
+      setFireVol(v) { fireVol = v; },
+      tone(...a) { if (live()) tone(...a); },
+      noise(...a) { if (live()) noise(...a); },
+      crackle(v = 1) { if (live() && fireVol > 0) noise(rnd(0.012, 0.06), 'highpass', rnd(1200, 5200), rnd(0.12, 0.45) * v * fireVol, rnd(0.5, 2)); },
       thud() { if (!live()) return; tone(120, 52, 0.14, 0.4); noise(0.09, 'lowpass', 700, 0.3); },
       chime(star) {
         if (!live()) return;
@@ -330,6 +352,7 @@
     mx.fillStyle = '#f6f0d6'; mx.beginPath(); mx.arc(ms / 2, ms / 2, ms / 2 - 2, 0, TAU); mx.fill();
     mx.globalCompositeOperation = 'destination-out';
     mx.beginPath(); mx.arc(ms * 0.3, ms * 0.4, ms * 0.44, 0, TAU); mx.fill();
+    run('resize');
   }
 
   // ================= 火と粒子 =================
@@ -338,7 +361,8 @@
   let dayTarget = 0, dayness = 0, skyCheck = 0;
   const flames = [], sparks = [], smokes = [], flying = [], landed = [];
   const rockets = [], fw = [], shoots = [];
-  const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD };
+  const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
+    slowT: 0, shake: 0, bright: 0, freeze: false };
   let flameAcc = 0, sparkAcc = 0, smokeAcc = 0, ambT = 0, lastThrow = 0, lastRoll = 0, crackT = 0;
 
   const palName = () => {
@@ -368,51 +392,72 @@
     }
   }
 
-  function throwLog(px) {
+  function throwLog(px, auto) { // auto = 長押しによる連続くべ
     const now = performance.now();
     if (now - lastThrow < 130 || flying.length >= 10) return;
     lastThrow = now;
     S.totalLogs++; dirty = true;
-    flying.push({
+    const L = {
       x0: cx + (px - cx) * 0.6, y0: H - 118, x1: cx + rnd(-16, 16) * U, y1: baseY - rnd(0, 14) * U,
       t: 0, dur: rnd(0.5, 0.62), rot: rnd(-0.6, 0.6), spin: (Math.random() < 0.5 ? -1 : 1) * rnd(3, 7), arc: rnd(90, 140) * U, x: 0, y: 0,
-    });
+      fuel: LOG_FUEL, flare: 0.2, sparks: 1, len: 58, col: null,
+    };
+    flying.push(L);
+    run('thrown', L, !!auto);
     hideHint(); haptic(8);
   }
   function landLog(L) {
-    S.fuel = Math.min(100, S.fuel + LOG_FUEL);
-    flare = Math.min(0.55, flare + 0.2);
-    emberBurst(L.x1, L.y1 - 8 * U, 9 + ((I * 9) | 0), 0.6 + I * 0.5);
-    landed.push({ x: L.x1, y: L.y1, rot: L.rot, a: 1 });
+    S.fuel = Math.min(100, S.fuel + L.fuel);
+    flare = Math.min(0.9, flare + L.flare);
+    emberBurst(L.x1, L.y1 - 8 * U, Math.round((9 + ((I * 9) | 0)) * L.sparks), 0.6 + I * 0.5);
+    landed.push({ x: L.x1, y: L.y1, rot: L.rot, a: 1, len: L.len, col: L.col });
     Sound.thud(); Sound.crackle(1.4); Sound.crackle(1);
+    run('land', L);
     const now = performance.now();
     if (now - lastRoll >= 1000) { lastRoll = now; rollRare('log'); } // 連打しても抽選は毎秒1回まで
   }
 
   // ================= レアな出来事 =================
-  function eligible(r) {
-    if (S.fuel < (r.minFuel || (r.on === 'log' ? 20 : 5))) return false;
+  BUSY.flame = () => fx.flameT > 0;
+  BUSY.fw = () => fx.fwBusy > 0;
+  BUSY.sky = () => fx.meteorT > 0;
+  BUSY.niji = () => !!fx.rain;
+  BUSY.spirit = () => !!fx.spirit;
+  function eligible(r, on) {
+    if (S.fuel < (r.minFuel || (on === 'log' ? 20 : 5))) return false;
     if (r.sky && r.sky !== (dayTarget ? 'day' : 'night')) return false;
-    if (FLAME_IDS.includes(r.id)) return fx.flameT <= 0;
-    if (r.id === 'hanabi' || r.id === 'tairin') return fx.fwBusy <= 0;
-    if (r.id === 'star' || r.id === 'meteor') return fx.meteorT <= 0;
-    if (r.id === 'niji') return !fx.rain;
-    return !fx.spirit;
+    if (r.ok && !r.ok()) return false;
+    const busy = BUSY[r.kind];
+    return !(busy && busy());
   }
-  // 1回の抽選。条件を満たす出来事それぞれが、ちょうど確率 p で選ばれる
+  // 1回の抽選。条件を満たす出来事それぞれが、ちょうど確率 p（×倍率）で選ばれる
   function pickRare(on) {
+    let mul = 1;
+    for (const fn of RARE_MUL) mul *= fn();
     let x = Math.random();
     for (const r of RARES) {
-      if (r.on !== on || !eligible(r)) continue;
-      if (x < r.p) return r.id;
-      x -= r.p;
+      if ((r.on !== on && r.on !== 'both') || !eligible(r, on)) continue;
+      const p = r.p * (r.pf ? r.pf() : 1) * (r.kind === 'hidden' ? 1 : mul);
+      if (x < p) return r.id;
+      x -= p;
     }
     return null;
   }
   function rollRare(on) { const id = pickRare(on); if (id) trigger(id, true); }
+  function recordRare(id, when, quiet) {
+    const now = when || Date.now();
+    const c = S.col[id] || (S.col[id] = { n: 0, first: now });
+    c.n++; c.last = now;
+    if (!quiet) { S.log.unshift({ id, t: now }); if (S.log.length > 100) S.log.length = 100; }
+    if (c.n === 1) { S.unseen = true; run('found', id); }
+    save(); syncButtons();
+    return c;
+  }
+  function addLogText(txt, when) { S.log.unshift({ t: when || Date.now(), txt }); if (S.log.length > 100) S.log.length = 100; dirty = true; }
   function trigger(id, record) {
     const r = RMAP[id];
     if (!r) return;
+    if (r.kind === 'hidden') { TRIG[id](record); return; } // 隠し要素は記録も演出も自前で行う
     if (FLAME_IDS.includes(id)) { fx.flame = id; fx.flameT = id === 'rainbow' ? 30 : 22; flare = 0.55; emberBurst(cx, baseY - 20 * U, 16, 1); }
     else if (id === 'hanabi') launchFireworks(4, false);
     else if (id === 'tairin') launchFireworks(10, true);
@@ -426,20 +471,15 @@
     else if (id === 'niji') fx.rain = { age: 0 };
     else if (id === 'hinoko') { fx.spirit = { kind: 'fire', age: 0, x: cx, y: baseY, s: 0, al: 1 }; Sound.blip(); }
     else if (id === 'tsuyu') { fx.spirit = { kind: 'dew', age: 0, x: W * 0.16, y: H * 0.2, s: 1, al: 0 }; Sound.blip(); }
+    else if (TRIG[id]) TRIG[id](record);
 
     let sub = 'プレビュー（記録されません）';
-    if (record) {
-      const now = Date.now();
-      const c = S.col[id] || (S.col[id] = { n: 0, first: now });
-      c.n++; c.last = now;
-      S.log.unshift({ id, t: now });
-      if (S.log.length > 100) S.log.length = 100;
-      if (c.n === 1) S.unseen = true;
-      sub = c.n === 1 ? 'はじめて出会った！ 図鑑に記録' : `${c.n}回目`;
-      save(); syncButtons();
-    }
-    toast('★'.repeat(r.star), r.name, sub, 5200);
-    Sound.chime(r.star);
+    if (record) { const c = recordRare(id); sub = c.n === 1 ? 'はじめて出会った！ 図鑑に記録' : `${c.n}回目`; }
+    announce(r, sub);
+  }
+  function announce(r, sub, cls) {
+    toast(starStr(r), r.name, sub, 5200, cls);
+    Sound.chime(Math.min(3, Math.round(r.star)));
     haptic(r.star >= 3 ? [40, 60, 40, 60, 90] : [30, 50, 30]);
   }
 
@@ -486,10 +526,14 @@
   }
 
   // ================= 更新 =================
-  function update(dt) {
+  function update(dt, real) {
     // --- 燃焼 ---
-    if (S.fuel > 0) S.fuel = Math.max(0, S.fuel - (BURN_A + BURN_B * S.fuel) * dt);
-    if (S.fuel >= 5) { S.burnSec += dt; dirty = true; }
+    if (!fx.freeze) {
+      let bm = 1;
+      for (const fn of BURN_MUL) bm *= fn();
+      if (S.fuel > 0) S.fuel = Math.max(0, S.fuel - (BURN_A + BURN_B * S.fuel) * bm * dt);
+      if (S.fuel >= 5) { S.burnSec += dt; dirty = true; }
+    }
     flare *= Math.exp(-2.6 * dt);
     lit = clamp(S.fuel / 6, 0, 1);
     const target = clamp(Math.pow(S.fuel / 100, 0.8) * 0.92 + flare * 0.5, 0, 1.12);
@@ -595,7 +639,7 @@
     updSpirit(dt);
 
     // --- 時間でのレア抽選（火が燃えている間、10秒ごと） ---
-    ambT += dt;
+    if (!fx.freeze) ambT += dt;
     if (ambT >= 10) { ambT = 0; rollRare('amb'); }
 
     // --- 音 ---
@@ -603,6 +647,9 @@
     if (crackT <= 0) { crackT = rnd(0.02, 0.5) / (0.25 + I * 1.6); if (lit > 0.2) Sound.crackle(0.5 + I); }
     Sound.level(Math.min(1, I), lit);
 
+    if (fx.shake > 0) fx.shake = Math.max(0, fx.shake - real * 9);
+    if (fx.bright > 0) fx.bright = Math.max(0, fx.bright - real * 0.35);
+    run('update', dt, real);
     updHud();
     saveT += dt;
     if (saveT > 5) { saveT = 0; if (dirty) save(); }
@@ -659,9 +706,9 @@
     return out.sort((p, q) => Math.sin(p.a) - Math.sin(q.a));
   })();
 
-  function drawLog(x, y, ang, len, th, freshness, alpha, glow) {
+  function drawLog(x, y, ang, len, th, freshness, alpha, glow, col) {
     g.save(); g.translate(x, y); g.rotate(ang); g.globalAlpha = alpha;
-    g.fillStyle = rgb(mix([34, 22, 15], [128, 88, 52], freshness));
+    g.fillStyle = rgb(mix([34, 22, 15], col || [128, 88, 52], freshness));
     rr(-len / 2, -th / 2, len, th, th * 0.4); g.fill();
     g.strokeStyle = freshness > 0.5 ? 'rgba(60,36,18,.55)' : 'rgba(0,0,0,.5)'; g.lineWidth = Math.max(1, U);
     g.beginPath();
@@ -729,13 +776,14 @@
   }
 
   function draw() {
-    g.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const sh = fx.shake * DPR, st = performance.now() / 1000;
+    g.setTransform(DPR, 0, 0, DPR, Math.sin(st * 71) * sh, Math.cos(st * 83) * sh);
     g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
     const day = dayness, night = 1 - day, pal = PAL[palName()], Ic = Math.min(1, I);
 
     // --- 空 ---
-    if (day < 1) { g.fillStyle = skyN; g.fillRect(0, 0, W, H); }
-    if (day > 0) { g.globalAlpha = day; g.fillStyle = skyD; g.fillRect(0, 0, W, H); g.globalAlpha = 1; }
+    if (day < 1) { g.fillStyle = skyN; g.fillRect(-9, -9, W + 18, H + 18); }
+    if (day > 0) { g.globalAlpha = day; g.fillStyle = skyD; g.fillRect(-9, -9, W + 18, H + 18); g.globalAlpha = 1; }
     if (night > 0.02) {
       g.fillStyle = '#fff';
       for (const s of stars) { g.globalAlpha = night * s.a * (0.55 + 0.45 * Math.sin(T * s.sp + s.ph)); g.fillRect(s.x, s.y, s.r, s.r); }
@@ -777,10 +825,15 @@
       blob([220, 232, 255], hx, hy, 7 * U, a);
     }
 
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+    run('sky', day);
+
     // --- 山・森・地面 ---
     g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
     if (day < 1) g.drawImage(layerN, 0, 0, W, H);
     if (day > 0) { g.globalAlpha = day; g.drawImage(layerD, 0, 0, W, H); g.globalAlpha = 1; }
+    run('ground', day);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 
     // --- 火の明かり ---
     g.globalCompositeOperation = 'lighter';
@@ -803,7 +856,7 @@
       const a = clamp((S.fuel - s.at) / 6, 0, 1);
       if (a > 0) drawLog(cx + s.x * U, baseY + s.y * U, s.a, s.l * U, 13 * U, 0, a, 0.25 + 0.5 * lit);
     }
-    for (const L of landed) drawLog(L.x, L.y, L.rot, 58 * U, 13 * U, L.a, L.a, 0);
+    for (const L of landed) drawLog(L.x, L.y, L.rot, L.len * U, 13 * U, L.a, L.a, 0, L.col);
 
     // --- 煙 ---
     const smokeC = mix([150, 150, 162], [238, 238, 238], day);
@@ -834,8 +887,10 @@
     g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 
     drawSpirit();
+    run('front', day);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 
-    for (const L of flying) { const k = L.t / L.dur, sc = 1.25 - 0.35 * k; drawLog(L.x, L.y, L.rot, 58 * U * sc, 13 * U * sc, 1, 1, 0); }
+    for (const L of flying) { const k = L.t / L.dur, sc = 1.25 - 0.35 * k; drawLog(L.x, L.y, L.rot, L.len * U * sc, 13 * U * sc, 1, 1, 0, L.col); }
 
     // --- 花火 ---
     g.globalCompositeOperation = 'lighter';
@@ -850,6 +905,9 @@
       g.beginPath(); g.moveTo(p.x - p.vx * 0.1, p.y - p.vy * 0.1); g.lineTo(p.x, p.y); g.stroke();
       blob(p.c, p.x, p.y, (p.big ? 5 : 4) * U, a);
     }
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+    run('top', day);
+    if (fx.bright > 0) { g.globalCompositeOperation = 'lighter'; g.globalAlpha = Math.min(0.5, fx.bright); g.fillStyle = '#fff3dc'; g.fillRect(-9, -9, W + 18, H + 18); }
     g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
   }
 
@@ -880,7 +938,8 @@
   }
 
   let toastTimer = 0;
-  function toast(stars, title, sub, ms) {
+  function toast(stars, title, sub, ms, cls) {
+    elToast.className = cls || '';
     const b = elToast.querySelector('b');
     b.textContent = '';
     if (stars) { const sp = document.createElement('span'); sp.textContent = stars; b.appendChild(sp); }
@@ -898,10 +957,10 @@
     $('btnSound').classList.toggle('active', S.set.sound);
     $('icoSky').innerHTML = skyTarget() ? ICON.sun : ICON.moon;
     $('lblSky').textContent = '空・' + SKY_LABEL[S.set.sky];
-    const found = RARES.filter((r) => S.col[r.id]).length;
-    $('lblBook').textContent = `図鑑 ${found}/${RARES.length}`;
+    $('lblBook').textContent = `図鑑 ${foundCount()}/${RARES.length}`;
     $('dot').classList.toggle('on', !!S.unseen);
   }
+  const foundCount = () => RARES.filter((r) => S.col[r.id]).length;
   function setSound(v) { S.set.sound = v; Sound.set(v); save(); syncButtons(); }
   function setSky(m) { S.set.sky = m; dayTarget = skyTarget(); save(); syncButtons(); }
 
@@ -913,17 +972,22 @@
     e.preventDefault();
     Sound.unlock();
     const px = fromBtn ? cx : e.clientX - app.getBoundingClientRect().left;
+    for (const guard of TAP_GUARD) if (guard(e)) return;
     throwLog(px);
     endFeed();
     if (fromBtn) btnFeed.classList.add('down');
-    holdDelay = setTimeout(() => { holdTimer = setInterval(() => throwLog(px + rnd(-20, 20)), 250); }, 380);
+    holdDelay = setTimeout(() => { holdTimer = setInterval(() => throwLog(px + rnd(-20, 20), true), 250); }, 380);
   }
   function endFeed() { clearTimeout(holdDelay); clearInterval(holdTimer); btnFeed.classList.remove('down'); }
   cv.addEventListener('pointerdown', (e) => startFeed(e, false));
   btnFeed.addEventListener('pointerdown', (e) => startFeed(e, true));
   for (const ev of ['pointerup', 'pointercancel', 'blur']) window.addEventListener(ev, endFeed);
   window.addEventListener('keydown', (e) => {
-    if ((e.key === ' ' || e.key === 'Enter') && !e.repeat && !app.classList.contains('sheet')) { e.preventDefault(); Sound.unlock(); throwLog(cx); }
+    if ((e.key === ' ' || e.key === 'Enter') && !e.repeat && !app.classList.contains('sheet')) {
+      e.preventDefault(); Sound.unlock();
+      for (const guard of TAP_GUARD) if (guard(e)) return;
+      throwLog(cx);
+    }
   });
 
   $('btnSound').addEventListener('click', () => {
@@ -945,6 +1009,31 @@
     : 'background:conic-gradient(#ff5a5a,#ffb23c,#ffe66a,#5fd86f,#5aa8ff,#9a6aff,#ff5a5a);box-shadow:0 0 14px #ffffff55');
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 
+  // 上部の小さな状態表示（天気・タイマーなど）、くべるボタンの上の小さなボタン、短いお知らせカード
+  const statusParts = {};
+  function setStatus(key, text) {
+    if (statusParts[key] === text) return;
+    statusParts[key] = text;
+    $('wx').textContent = Object.values(statusParts).filter(Boolean).join('　');
+  }
+  function addChip(id, label, fn) { const b = el('button', 'chip', label); b.id = id; b.addEventListener('click', (e) => { Sound.unlock(); fn(e); }); $('chips').appendChild(b); return b; }
+  let noteTimer = 0;
+  function closeNote() { clearTimeout(noteTimer); app.classList.remove('noting'); }
+  function showNote(title, lines, opt) {
+    opt = opt || {};
+    const n = $('note'); n.textContent = '';
+    n.appendChild(el('b', '', title));
+    if (opt.img) { const im = new Image(); im.src = opt.img; n.appendChild(im); }
+    for (const l of lines) n.appendChild(el('p', '', l));
+    const bt = el('div', 'btns');
+    for (const [label, fn] of opt.buttons || []) { const b = el('button', '', label); b.addEventListener('click', fn); bt.appendChild(b); }
+    const c = el('button', '', 'とじる'); c.addEventListener('click', closeNote); bt.appendChild(c);
+    n.appendChild(bt);
+    app.classList.add('noting');
+    clearTimeout(noteTimer);
+    if (opt.ms) noteTimer = setTimeout(closeNote, opt.ms);
+  }
+
   let sheetTab = 'book', selId = null, wipeArm = 0;
   function openSheet(tab) { sheetTab = tab; endFeed(); app.classList.add('sheet'); $('sheet').setAttribute('aria-hidden', 'false'); renderSheet(); $('sheetBody').scrollTop = 0; }
   function closeSheet() { app.classList.remove('sheet'); $('sheet').setAttribute('aria-hidden', 'true'); }
@@ -955,25 +1044,38 @@
     else if (sheetTab === 'log') renderLog();
     else renderSet();
   }
+  let bookPage = 'rare';
   function renderBook() {
     const pane = $('paneBook'); pane.textContent = '';
-    const found = RARES.filter((r) => S.col[r.id]).length;
-    const h = el('h2', '', '図鑑'); h.appendChild(el('small', '', `${found} / ${RARES.length}`)); pane.appendChild(h);
+    if (BOOK_PAGES.length > 1) {
+      const seg = el('div', 'seg pages');
+      for (const pg of BOOK_PAGES) {
+        const b = el('button', pg.id === bookPage ? 'on' : '', pg.label);
+        b.addEventListener('click', () => { bookPage = pg.id; renderBook(); $('sheetBody').scrollTop = 0; });
+        seg.appendChild(b);
+      }
+      pane.appendChild(seg);
+    }
+    (BOOK_PAGES.find((pg) => pg.id === bookPage) || BOOK_PAGES[0]).render(pane);
+  }
+  BOOK_PAGES.push({ id: 'rare', label: '出来事', render: renderRares });
+  function renderRares(pane) {
+    const h = el('h2', '', '出来事'); h.appendChild(el('small', '', `${foundCount()} / ${RARES.length}`)); pane.appendChild(h);
     const grid = el('div', 'grid'), d = el('div'); d.id = 'detail';
     const show = () => {
       grid.querySelectorAll('.card').forEach((c) => c.classList.toggle('sel', c.dataset.id === selId));
       d.textContent = '';
       const r = RMAP[selId], c = r && S.col[r.id];
       if (!r) { d.appendChild(el('small', '', 'カードをタップすると、説明が見られます。')); return; }
-      const b = el('b', '', c ? r.name : '？？？'); b.appendChild(el('span', 'st', '★'.repeat(r.star)));
+      const b = el('b', '', c ? r.name : '？？？'); b.appendChild(el('span', 'st', starStr(r)));
       d.append(b, el('div', '', c ? r.desc : r.hint));
       if (c) d.appendChild(el('small', '', `はじめて出会った日：${fmtDate(c.first)}　／　${c.n}回`));
     };
     for (const r of RARES) {
       const c = S.col[r.id];
-      const card = el('button', 'card' + (c ? '' : ' lock')); card.dataset.id = r.id;
+      const card = el('button', 'card' + (c ? '' : ' lock') + (r.kind === 'hidden' ? ' hid' : '')); card.dataset.id = r.id;
       const orb = el('span', 'orb', c ? r.glyph : '？'); orb.style.cssText = orbCss(r);
-      const meta = el('span', 'ct'); meta.append(el('i', 'st', '★'.repeat(r.star)), document.createTextNode(c ? ` ${c.n}回` : ''));
+      const meta = el('span', 'ct'); meta.append(el('i', 'st', starStr(r)), document.createTextNode(c ? ` ${c.n}回` : ''));
       card.append(orb, el('span', 'nm', c ? r.name : '？？？'), meta);
       card.addEventListener('click', () => { selId = r.id; show(); });
       grid.appendChild(card);
@@ -986,9 +1088,10 @@
     pane.appendChild(el('h2', '', 'できごとログ'));
     if (!S.log.length) { pane.appendChild(el('div', 'empty', 'まだ何も起きていません。\n火を育てて、気長に待ちましょう。')); pane.lastChild.style.whiteSpace = 'pre-line'; return; }
     for (const e of S.log) {
-      const r = RMAP[e.id]; if (!r) continue;
+      const r = RMAP[e.id];
+      if (!r && !e.txt) continue;
       const row = el('div', 'logrow');
-      row.append(el('time', '', fmtDate(e.t)), el('span', 'st', '★'.repeat(r.star)), el('span', '', r.name));
+      row.append(el('time', '', fmtDate(e.t)), el('span', 'st', r ? starStr(r) : ''), el('span', '', r ? r.name : e.txt));
       pane.appendChild(row);
     }
   }
@@ -1006,19 +1109,27 @@
       seg.appendChild(b);
     }
     row('空', seg);
+    const seg3 = (cur, opts, fn) => { // [値, 表示] の並びから切り替えボタンを作る
+      const s = el('div', 'seg');
+      for (const [v, label] of opts) { const b = el('button', cur === v ? 'on' : '', label); b.addEventListener('click', () => { fn(v); renderSet(); }); s.appendChild(b); }
+      return s;
+    };
+    const head = (t) => { pane.appendChild(el('h2', '', t)).style.marginTop = '20px'; };
+    for (const fn of SET_ROWS) fn({ pane, row, tog, seg: seg3, head });
     pane.appendChild(el('h2', '', 'きろく')).style.marginTop = '20px';
     const dl = el('dl', 'stats');
     const stat = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
     stat('くべた薪', `${S.totalLogs.toLocaleString('ja-JP')}本`);
     stat('火を燃やした時間', fmtDur(S.burnSec));
-    stat('見つけた出来事', `${RARES.filter((r) => S.col[r.id]).length} / ${RARES.length}`);
+    stat('見つけた出来事', `${foundCount()} / ${RARES.length}`);
+    for (const fn of STATS) fn(stat);
     stat('はじめて火をおこした日', fmtDay(S.firstDay));
     pane.appendChild(dl);
     const armed = Date.now() < wipeArm;
     const wipe = el('button', 'danger' + (armed ? ' arm' : ''), armed ? '本当に消す（もう一度タップ）' : '記録をすべて消す');
     wipe.addEventListener('click', () => {
       if (Date.now() < wipeArm) {
-        const keep = S.set; S = fresh(); S.set = keep; wipeArm = 0; selId = null; lastCount = -1;
+        const keep = S.set; S = fresh(); S.set = keep; applyDefs(); wipeArm = 0; selId = null; lastCount = -1;
         fx.flame = null; fx.flameT = 0; save(); syncButtons(); renderSet(); toast('', '記録を消しました', '', 2000);
       } else { wipeArm = Date.now() + 4000; renderSet(); setTimeout(() => { if (sheetTab === 'set' && app.classList.contains('sheet')) renderSet(); }, 4100); }
     });
@@ -1053,24 +1164,30 @@
   window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(resize, 120); });
 
   // ================= 起動 =================
-  let lastT = 0;
+  let lastT = 0, halted = false;
   function frame(now) {
+    if (halted) { lastT = 0; return; } // 描画ループを完全に止める（電池を使わない）
     requestAnimationFrame(frame);
-    const dt = lastT ? Math.min(0.05, (now - lastT) / 1000) : 0.016;
-    lastT = now; T += dt;
-    update(dt); draw();
+    const real = lastT ? Math.min(0.05, (now - lastT) / 1000) : 0.016;
+    lastT = now;
+    let scale = 1;
+    if (fx.slowT > 0) { fx.slowT -= real; scale = 0.3; } // ★3の一瞬のスローモーション
+    const dt = real * scale;
+    T += dt;
+    update(dt, real); draw();
   }
 
   resize();
   dayTarget = skyTarget(); dayness = dayTarget;
   I = clamp(Math.pow(S.fuel / 100, 0.8) * 0.92, 0, 1);
   syncButtons(); updHud();
+  run('boot');
   if (S.totalLogs > 0) {
     hideHint();
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { fx: (id) => trigger(id, false), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: RARES.map((r) => r.id), state: () => S, pick: pickRare };
+    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: RARES.map((r) => r.id).concat(Object.keys(FX)), state: () => S, pick: pickRare };
   }
   requestAnimationFrame(frame);
 })();
