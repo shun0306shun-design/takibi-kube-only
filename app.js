@@ -266,10 +266,13 @@
   let stars = [], clouds = [];
 
   const spriteCache = new Map();
-  function sprite(c) {
-    const key = (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0);
+  const SPRITE_MAX = 200;
+  function sprite(c) { // 色は粗く丸めてから使い回す。枚数に上限をつけ、あふれたら古いものから手放す（増え続けるとメモリを圧迫する）
+    c = [Math.min(255, Math.round(c[0] / 12) * 12), Math.min(255, Math.round(c[1] / 12) * 12), Math.min(255, Math.round(c[2] / 12) * 12)];
+    const key = c[0] + ',' + c[1] + ',' + c[2];
     let s = spriteCache.get(key);
     if (!s) {
+      if (spriteCache.size >= SPRITE_MAX) { const old = spriteCache.keys().next().value; drop(spriteCache.get(old)); spriteCache.delete(old); }
       s = document.createElement('canvas'); s.width = s.height = 64;
       const x = s.getContext('2d');
       const gr = x.createRadialGradient(32, 32, 0, 32, 32, 32);
