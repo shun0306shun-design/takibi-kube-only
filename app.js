@@ -376,6 +376,24 @@
     return c;
   }
 
+  // 月の満ち欠け。日付から計算する（通信なし。基準の新月 2000年1月6日 18:14 UTC、周期 29.530588853 日。1日ほどのずれは許容）
+  const SYNODIC = 29.530588853;
+  let moonForce = null; // ?debug の takibi.moon(0〜1)
+  const moonPhase = (t) => { if (moonForce != null) return moonForce; const d = (t - Date.UTC(2000, 0, 6, 18, 14)) / 86400000 / SYNODIC; return d - Math.floor(d); }; // 0 = 新月、0.5 = 満月
+  const moonAge = () => fx.moonP * SYNODIC;
+  const isNewMoon = () => moonAge() < 2 || moonAge() > SYNODIC - 2;        // 新月のころ（前後2日）
+  const isFullMoon = () => Math.abs(moonAge() - SYNODIC / 2) < 1;           // 満月のころ（前後1日）
+  const moonName = () => { const a = moonAge(); return [[1.5, '新月'], [5.5, '三日月'], [9, '上弦の月'], [12, '十日夜の月'], [14, '十三夜'], [15.6, '満月'], [17.5, '十六夜'], [21, '更待月'], [24, '下弦の月'], [28, '有明の月'], [99, '新月']].find((m) => a < m[0])[1]; };
+  function paintMoon() { // 形が変わったときと resize のときだけ描く
+    const ms = moonCv.width, x = moonCv.getContext('2d'), c = ms / 2, r = c - 2, p = fx.moonP, k = Math.cos(p * TAU);
+    x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, ms, ms);
+    x.fillStyle = 'rgba(246,240,214,.07)'; x.beginPath(); x.arc(c, c, r, 0, TAU); x.fill(); // 影の側も、うっすら見える
+    x.translate(c, c); if (p >= 0.5) x.scale(-1, 1);                                         // 欠けていく月は左右を入れ替える
+    x.fillStyle = '#f6f0d6'; x.beginPath();
+    x.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);                                        // 光っている側の縁
+    x.ellipse(0, 0, Math.max(0.01, Math.abs(k) * r), r, 0, Math.PI / 2, -Math.PI / 2, k > 0); // 明暗の境
+    x.fill();
+  }
   function resize() {
     const r = app.getBoundingClientRect();
     W = Math.max(240, Math.round(r.width)); H = Math.max(320, Math.round(r.height));
@@ -396,16 +414,14 @@
     const R = seeded(99);
     stars = [];
     const n = Math.round(clamp((W * horizon) / 2400, 40, 160));
-    for (let i = 0; i < n; i++) stars.push({ x: R() * W, y: R() * horizon * 0.96, r: 0.7 + R() * 1.3, a: 0.35 + R() * 0.65, sp: 0.6 + R() * 2.4, ph: R() * TAU });
+    fx.starBase = n; // ふだん見える数。新月のころは、残りも見える（上限240）
+    for (let i = 0, m = Math.min(240, Math.round(n * 1.5)); i < m; i++) stars.push({ x: R() * W, y: R() * horizon * 0.96, r: 0.7 + R() * 1.3, a: 0.35 + R() * 0.65, sp: 0.6 + R() * 2.4, ph: R() * TAU });
     clouds = [];
     for (let i = 0; i < 4; i++) clouds.push({ x: R() * W, y: horizon * (0.12 + R() * 0.45), w: (90 + R() * 90) * U, h: (16 + R() * 12) * U, sp: (2 + R() * 4) * U });
     moonR = 18 * U;
     moonCv = document.createElement('canvas');
-    const ms = Math.ceil(moonR * 2 * DPR) + 4; moonCv.width = moonCv.height = ms;
-    const mx = moonCv.getContext('2d');
-    mx.fillStyle = '#f6f0d6'; mx.beginPath(); mx.arc(ms / 2, ms / 2, ms / 2 - 2, 0, TAU); mx.fill();
-    mx.globalCompositeOperation = 'destination-out';
-    mx.beginPath(); mx.arc(ms * 0.3, ms * 0.4, ms * 0.44, 0, TAU); mx.fill();
+    moonCv.width = moonCv.height = Math.ceil(moonR * 2 * DPR) + 4;
+    paintMoon();
     run('resize');
   }
 
@@ -421,7 +437,7 @@
   const rockets = [], fw = [], shoots = [];
   const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
     slowT: 0, shake: 0, bright: 0, freeze: false, base: 'fire', hold: false, omen: null,
-    ambGap: 10, steward: false, uncounted: false, fw: 1, fh: 1, sparkMul: 1, roastMul: 1, slots: null };
+    ambGap: 10, steward: false, uncounted: false, moonP: 0.1, starBase: 0, starDark: false, fw: 1, fh: 1, sparkMul: 1, roastMul: 1, slots: null };
   let flameAcc = 0, sparkAcc = 0, smokeAcc = 0, ambT = 0, lastThrow = 0, lastRoll = 0, crackT = 0;
 
   const palName = () => { // レアの色炎 ＞ ふだんの色（業火タイムの金、または自分で選んだ色）
@@ -855,7 +871,7 @@
     if (day > 0) { g.globalAlpha = day; g.fillStyle = skyD; g.fillRect(-9, -9, W + 18, H + 18); g.globalAlpha = 1; }
     if (night > 0.02) {
       g.fillStyle = '#fff';
-      for (const s of stars) { g.globalAlpha = night * s.a * (0.55 + 0.45 * Math.sin(T * s.sp + s.ph)); g.fillRect(s.x, s.y, s.r, s.r); }
+      for (let i = 0, m = fx.starDark ? stars.length : fx.starBase; i < m; i++) { const s = stars[i]; g.globalAlpha = night * s.a * (0.55 + 0.45 * Math.sin(T * s.sp + s.ph)); g.fillRect(s.x, s.y, s.r, s.r); }
       const mx = W * 0.78, my = Math.max(H * 0.15, 96);
       g.globalCompositeOperation = 'lighter';
       blob([190, 205, 255], mx, my, 64 * U, 0.2 * night);
@@ -1066,7 +1082,7 @@
   $('btnSky').addEventListener('click', () => {
     const order = ['auto', 'night', 'day'];
     setSky(order[(order.indexOf(S.set.sky) + 1) % 3]);
-    toast('', '空：' + SKY_LABEL[S.set.sky], S.set.sky === 'auto' ? '時刻に合わせて朝と夜が変わります' : '', 1800);
+    toast('', '空：' + SKY_LABEL[S.set.sky], (S.set.sky === 'auto' ? '時刻に合わせて朝と夜が変わります　／　' : '') + '今夜の月：' + moonName(), 2600);
   });
 
   // --- 図鑑・ログ・設定 ---
@@ -1864,7 +1880,7 @@
     x.textBaseline = 'alphabetic'; x.shadowColor = 'rgba(0,0,0,.75)'; x.shadowBlur = 6 * k; x.fillStyle = 'rgba(255,244,224,.92)';
     x.textAlign = 'right';
     x.font = font(13); x.fillText(`くべた薪 ${S.totalLogs.toLocaleString('ja-JP')}本`, c.width - 14 * k, c.height - 30 * k);
-    x.font = font(10.5); x.fillText(`${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`, c.width - 14 * k, c.height - 14 * k);
+    x.font = font(10.5); x.fillText(`${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}${dayTarget ? '' : '　' + moonName()}`, c.width - 14 * k, c.height - 14 * k);
     x.textAlign = 'left'; x.fillStyle = 'rgba(255,244,224,.6)'; x.fillText('焚き火くべ', 14 * k, c.height - 14 * k);
     const name = `takibi-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.png`;
     c.toBlob((blob) => {
@@ -2037,7 +2053,7 @@
   FX.milestone = () => milestone(777);
 
   // --- 図鑑が埋まるたびに図鑑ボタンが光る。全部（？？？のひとつを除く）埋めると炎の色を選べる ---
-  const bookDone = () => RARES.every((r) => r.id === 'gameover' || S.col[r.id]);
+  const bookDone = () => S.colorFree || RARES.every((r) => r.id === 'gameover' || S.col[r.id]);
   HOOKS.found.push(() => {
     const b = $('btnBook'); b.classList.remove('glow'); void b.offsetWidth; b.classList.add('glow');
     if (bookDone()) setTimeout(() => showNote('図鑑がそろいました', ['すべての出来事に出会いました。', '設定から、炎の色を自由に選べるようになりました。'], { ms: 16000 }), 6000);
@@ -2687,6 +2703,52 @@
   for (const v of VISITORS) FX['friend-' + v.id] = () => { trigger(v.id, false); Object.assign(fx.visitor, { lv: 4, setup: true, close: true }); }; // いちばんなかよくなったときのしぐさ
   FX.gift = () => toast('', 'キツネが、どんぐりを置いていった', 'プレビュー（記録されません）', 3600);
 
+  // ================= 月の夜（月の満ち欠けにともなう景色とレア） =================
+  // 炎の色をすでに解放している人は取り消さない: 追加前の21種がそろっていれば、解放済みの印を残す
+  const OLD21 = ['blue', 'green', 'purple', 'pink', 'rainbow', 'hanabi', 'tairin', 'star', 'meteor', 'niji', 'hinoko', 'tsuyu', 'kitsune', 'neko', 'fukurou', 'tabibito', 'shika', 'gekko', 'dust', 'kinmaki', 'continue'];
+  def('colorFree', () => OLD21.every((id) => S.col[id]));
+  CHECK.colorFree = V.bool;
+  const mw = { cv: null, tick: 0 };
+  fx.milkyT = 0; fx.haloT = 0;
+  const skyClear = () => 1 - Math.max(wxs.rain, wxs.fog, wxs.snow);
+  function moonRefresh() { const p = moonPhase(now()); if (Math.abs(p - fx.moonP) > 0.002) { fx.moonP = p; paintMoon(); } fx.starDark = isNewMoon(); }
+  fx.moonP = moonPhase(now()); fx.starDark = isNewMoon();
+  HOOKS.sec.push(() => { if (++mw.tick >= 600) { mw.tick = 0; moonRefresh(); } }); // 10分に1回たしかめる
+  HOOKS.resize.push(() => { // 天の川は動かない絵として1度だけ描く（等倍・空の範囲だけ）
+    drop(mw.cv);
+    const c = mw.cv = document.createElement('canvas'); c.width = Math.max(2, W); c.height = Math.max(2, horizon);
+    const x = c.getContext('2d'), R = seeded(77), gauss = () => (R() + R() + R() + R() - 2) / 2;
+    for (let i = 0; i < 26; i++) { const t = R(), px = W * (0.05 + 0.9 * t), py = horizon * (0.82 - 0.74 * t), r = (40 + R() * 46) * U; const gr = x.createRadialGradient(px, py, 0, px, py, r); gr.addColorStop(0, 'rgba(190,200,255,.07)'); gr.addColorStop(1, 'rgba(190,200,255,0)'); x.fillStyle = gr; x.fillRect(px - r, py - r, r * 2, r * 2); }
+    for (let i = 0; i < 520; i++) { const t = R(), d = gauss() * 34 * U; x.fillStyle = `rgba(${225 + R() * 30 | 0},${225 + R() * 30 | 0},255,${0.25 + R() * 0.6})`; const s = 0.5 + R() * 0.9; x.fillRect(W * (0.05 + 0.9 * t) + d * 0.64, horizon * (0.82 - 0.74 * t) + d * 0.77, s, s); }
+  });
+  HOOKS.update.push((dt) => { if (fx.milkyT > 0) fx.milkyT -= dt; if (fx.haloT > 0) fx.haloT -= dt; });
+  HOOKS.sky.push((day) => {
+    const night = (1 - day) * skyClear();
+    if (night <= 0.02) return;
+    const fade = (t) => clamp(t / 4, 0, 1) * clamp((30 - t) / 4, 0, 1);
+    const a = Math.max(fx.milkyT > 0 ? fade(30 - fx.milkyT) : 0, isNewMoon() ? 0.3 : 0); // 新月のころはうっすら、レアのときははっきり
+    if (a > 0.01 && mw.cv) { g.globalAlpha = a * night; g.drawImage(mw.cv, 0, 0, W, horizon); g.globalAlpha = 1; }
+    if (fx.haloT > 0) { // 月暈: 月のまわりの光の輪
+      const h = fade(30 - fx.haloT) * (1 - day), mx = W * 0.78, my = Math.max(H * 0.15, 96);
+      g.strokeStyle = `rgba(226,234,255,${0.26 * h})`; g.lineWidth = 6 * U; g.beginPath(); g.arc(mx, my, 50 * U, 0, TAU); g.stroke();
+      g.strokeStyle = `rgba(255,236,214,${0.2 * h})`; g.lineWidth = 2 * U; g.beginPath(); g.arc(mx, my, 46 * U, 0, TAU); g.stroke();
+    }
+  });
+  HOOKS.ground.push((day) => { // 満月のころ: 夜の地面がほんのり明るい
+    if (!isFullMoon() || day > 0.9) return;
+    g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.075 * (1 - day) * skyClear(); g.fillStyle = '#a9bcff'; g.fillRect(0, horizon, W, H - horizon);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  });
+  addRare({ id: 'amanogawa', name: '天の川', star: 2, glyph: '河', orb: ['#ffffff', '#8f9cf0', '#10143c'], on: 'amb', kind: 'milky', sky: 'night', p: 0.01,
+    ok: () => isNewMoon() && wxKind() === 'clear',
+    desc: '月のない夜、空を横切る光の川が、はっきりと見える。', hint: '新月のころの、晴れた夜に…。' });
+  addRare({ id: 'tsukigasa', name: '月暈', star: 2, glyph: '暈', orb: ['#ffffff', '#d6dcf4', '#3a4470'], on: 'amb', kind: 'halo', sky: 'night', p: 0.01,
+    ok: () => isFullMoon() && (wxKind() === 'clear' || wxKind() === 'fog'),
+    desc: '満月のまわりに、大きな光の輪がかかる。月暈（つきがさ）。', hint: '満月のころの、晴れか霧の夜に…。' });
+  BUSY.milky = () => fx.milkyT > 0; BUSY.halo = () => fx.haloT > 0;
+  TRIG.amanogawa = () => { fx.milkyT = 30; };
+  TRIG.tsukigasa = () => { fx.haloT = 30; };
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2727,7 +2789,7 @@
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, endVisit: () => { if (fx.visitor) fx.visitor.age = Math.max(fx.visitor.age, fx.visitor.stay + 0.01); }, pick: pickRare,
+    window.takibi = { moon: (v) => { moonForce = v == null ? null : clamp(v, 0, 0.9999); moonRefresh(); paintMoon(); return moonName(); }, moonAt: (t) => { const d = (t - Date.UTC(2000, 0, 6, 18, 14)) / 86400000 / SYNODIC; return d - Math.floor(d); }, fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, endVisit: () => { if (fx.visitor) fx.visitor.age = Math.max(fx.visitor.age, fx.visitor.stay + 0.01); }, pick: pickRare,
       skip: (min) => { const sec = clamp(min * 60, 0, 30 * 86400), f0 = S.fuel; clockSkew += min * 60000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
       counts: () => ({ fps: Math.round(perf.fps), quality: Q(), visitor: fx.visitor ? fx.visitor.kind : null, wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
