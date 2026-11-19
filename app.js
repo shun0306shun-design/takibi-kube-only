@@ -387,7 +387,7 @@
     horizon = Math.round(baseY - H * 0.1);
     drop(layerN); drop(layerD); drop(fBuf && fBuf.c); drop(sBuf && sBuf.c); drop(moonCv);
     layerN = makeLayer(false); layerD = makeLayer(true);
-    fBuf = makeBuf(cx - 180 * U, baseY - 340 * U, 360 * U, 380 * U, 0.5);
+    fBuf = makeBuf(cx - 195 * U, baseY - 400 * U, 390 * U, 440 * U, 0.5);
     sBuf = makeBuf(cx - 215 * U, baseY - 580 * U, 430 * U, 600 * U, 0.3);
     skyN = g.createLinearGradient(0, 0, 0, horizon);
     skyN.addColorStop(0, '#04050d'); skyN.addColorStop(0.55, '#0a1030'); skyN.addColorStop(1, '#1d1b48');
@@ -421,7 +421,7 @@
   const rockets = [], fw = [], shoots = [];
   const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
     slowT: 0, shake: 0, bright: 0, freeze: false, base: 'fire', hold: false, omen: null,
-    ambGap: 10, steward: false, uncounted: false };
+    ambGap: 10, steward: false, uncounted: false, fw: 1, fh: 1, sparkMul: 1, roastMul: 1, slots: null };
   let flameAcc = 0, sparkAcc = 0, smokeAcc = 0, ambT = 0, lastThrow = 0, lastRoll = 0, crackT = 0;
 
   const palName = () => { // レアの色炎 ＞ ふだんの色（業火タイムの金、または自分で選んだ色）
@@ -432,12 +432,12 @@
   // 薪による一時的な色味。レアの色炎があるときはそちらを優先し、ふだんの炎にだけ混ぜる
   const flamePal = () => { const n = palName(); return n === 'fire' && fx.tintT > 0 && Math.random() < 0.62 ? fx.tint : n; };
   function spawnFlame() {
-    const spread = (10 + 34 * I) * U;
+    const spread = (10 + 34 * I) * U * fx.fw;
     const off = (Math.random() + Math.random() + Math.random() - 1.5) * spread;
     const center = 1 - Math.min(1, Math.abs(off) / (spread * 1.3));
     flames.push({
       x: cx + off, y: baseY - rnd(0, 8) * U, ox: off * 0.22,
-      vx: rnd(-8, 8) * U, vy: -(52 + 150 * I) * U * (0.42 + 0.78 * center) * rnd(0.8, 1.2),
+      vx: rnd(-8, 8) * U, vy: -(52 + 150 * I) * U * fx.fh * (0.42 + 0.78 * center) * rnd(0.8, 1.2),
       life: (0.5 + 0.6 * I) * (0.5 + 0.7 * center) * rnd(0.8, 1.25) * (0.5 + 0.5 * lit), age: 0,
       size: (20 + 30 * I) * U * rnd(0.7, 1.2) * (0.45 + 0.55 * lit), seed: rnd(0, TAU), pal: flamePal(),
     });
@@ -608,7 +608,7 @@
     const target = clamp(Math.pow(S.fuel / 100, 0.8) * 0.92 + flare * 0.5, 0, 1.12) * (fx.veil ? 0.12 : 1);
     I += (target - I) * Math.min(1, dt * 4);
     flick = 1 + 0.07 * Math.sin(T * 11.3) + 0.05 * Math.sin(T * 23.7 + 1) + 0.04 * Math.sin(T * 5.1 + 2);
-    flameH = (36 + 214 * I) * U * (0.2 + 0.8 * lit);
+    flameH = (36 + 214 * I) * U * fx.fh * (0.2 + 0.8 * lit);
 
     // --- 空 ---
     skyCheck -= dt;
@@ -631,7 +631,7 @@
     }
 
     // --- 火の粉 ---
-    sparkAcc += (0.5 + lit * (2 + 11 * I)) * dt * Q();
+    sparkAcc += (0.5 + lit * (2 + 11 * I)) * dt * Q() * fx.sparkMul;
     while (sparkAcc >= 1) {
       sparkAcc--;
       const pal = PAL[palName()];
@@ -921,7 +921,7 @@
     blob([255, 190, 80], 0, 0, 38 * U, (0.22 + 0.5 * lit) * pulse);
     g.restore();
     g.globalCompositeOperation = 'source-over';
-    for (const s of SLOTS) {
+    for (const s of fx.slots || SLOTS) {
       const a = clamp((S.fuel - s.at) / 6, 0, 1);
       if (a > 0) drawLog(cx + s.x * U, baseY + s.y * U, s.a, s.l * U, 13 * U, 0, a, 0.25 + 0.5 * lit);
     }
@@ -1411,7 +1411,7 @@
     if (roast.on) {
       if (roast.done) { roast.done += dt; if (roast.done > 1.6) { roast.on = false; syncChips(); } }
       else {
-        roast.p += dt * (0.3 + 1.4 * Math.min(1, I)) / ROASTS[roast.item].time;
+        roast.p += dt * fx.roastMul * (0.3 + 1.4 * Math.min(1, I)) / ROASTS[roast.item].time;
         if (roast.p >= 1.3 || S.fuel < 5) roastPull(); // 放っておくと黒焦げ／火が消えたらそこまで
       }
     }
@@ -2560,6 +2560,67 @@
   AWAY_LINES.push(() => (buryReady() ? `うめた${BURY[S.bury.item].name}が、いい香りをさせています。` : null));
   HOWTO.push(['ember', '熾：「焚き火」くらいの火を保つと、ゆっくりたまります（●の数）。火持ちがよくなり、たまると あぶる から「うめる」が選べます。うめたものは時間をかけて焼け、いつ ほりだしても失敗にはなりません。']);
   for (const res of Object.keys(BRES)) FX['bury-' + res] = () => toast('', BRES[res][0] + BURY.kuri.name, 'プレビュー（記録されません）', 3000);
+
+  // ================= 薪の組み方 =================
+  // 炎の形と、火力・減り・火の粉・熾のたまり方が変わる。レアの確率は組み方では変わらない
+  const STACKS = [
+    { id: 'gassho', name: '合掌型', short: '合掌', h: 1, w: 1, fuel: 1, burn: 1, sparks: 1, ember: 1, roast: 1, slots: SLOTS,
+      desc: '立てかけて組む、ふだんの形。' },
+    { id: 'igeta', name: '井桁型', short: '井桁', h: 1.15, w: 1.15, fuel: 1.25, burn: 1.35, sparks: 1.3, ember: 0.7, roast: 1,
+      desc: '井の字に積む。高く太い炎がすぐ上がるが、薪の減りは早い。',
+      slots: [{ x: -28, y: -21, a: 0, l: 18, at: 62 }, { x: 28, y: -21, a: 0, l: 18, at: 26 }, { x: 0, y: -10, a: 0.02, l: 82, at: 44 }, { x: -29, y: 1, a: 0, l: 18, at: -10 }, { x: 29, y: 1, a: 0, l: 18, at: -10 }, { x: 0, y: 12, a: -0.02, l: 88, at: 10 }] },
+    { id: 'heiretsu', name: '並列型', short: '並列', h: 0.75, w: 1.35, fuel: 1, burn: 0.7, sparks: 0.7, ember: 1.5, roast: 0.8,
+      desc: '横に並べる。低く広い炎でゆっくり長く燃え、熾がよく育つ。あぶりも狙いやすい。',
+      slots: [{ x: 0, y: -7, a: 0.03, l: 60, at: 62 }, { x: -26, y: 0, a: -0.04, l: 62, at: 26 }, { x: 27, y: 0, a: 0.05, l: 60, at: 44 }, { x: -46, y: 9, a: 0.04, l: 60, at: -10 }, { x: 46, y: 9, a: -0.05, l: 60, at: -10 }, { x: 0, y: 12, a: 0, l: 66, at: 10 }] },
+  ];
+  const STMAP = Object.fromEntries(STACKS.map((s) => [s.id, s]));
+  def('stack', () => 'gassho');
+  def('stackRec', () => ({})); // 組み方ごとの、はじめて使った日と燃やした時間
+  CHECK.stack = V.oneOf(STACKS.map((s) => s.id));
+  CHECK.stackRec = V.rec(() => STACKS.map((s) => s.id), V.obj({ first: V.time, sec: V.num(0, 1e10) }));
+  const stk = { cur: STMAP[S.stack] || STACKS[0], from: null, t: 1, preview: false };
+  function stackApply() { const c = stk.cur; fx.sparkMul = c.sparks; fx.emberMul = c.ember; fx.roastMul = c.roast; if (stk.t >= 1) { fx.fw = c.w; fx.fh = c.h; fx.slots = c.slots; } }
+  function stackSet(id, preview) { // 約3秒かけて組み変わる（火力は変えない）
+    if (!STMAP[id] || STMAP[id] === stk.cur) return;
+    stk.from = { w: fx.fw, h: fx.fh, slots: fx.slots || SLOTS }; stk.cur = STMAP[id]; stk.t = 0; stk.preview = !!preview;
+    if (!preview) { S.stack = id; save(); }
+    stackApply();
+    toast('', stk.cur.name, stk.cur.desc, 3200);
+  }
+  stackApply();
+  HOOKS.thrown.push((L) => { L.fuel *= stk.cur.fuel; L.sparks *= stk.cur.sparks; });
+  BURN_MUL.push(() => stk.cur.burn);
+  HOOKS.update.push((dt) => {
+    if (stk.t < 1) {
+      stk.t = Math.min(1, stk.t + dt / 3);
+      const e = stk.t * stk.t * (3 - 2 * stk.t), c = stk.cur, o = stk.from;
+      fx.fw = lerp(o.w, c.w, e); fx.fh = lerp(o.h, c.h, e);
+      fx.slots = stk.t >= 1 ? c.slots : c.slots.map((s, i) => { const p = o.slots[i]; return { x: lerp(p.x, s.x, e), y: lerp(p.y, s.y, e), a: lerp(p.a, s.a, e), l: lerp(p.l, s.l, e), at: s.at }; });
+    }
+    if (S.fuel >= 5 && !fx.freeze && !stk.preview) {
+      const rec = S.stackRec[stk.cur.id] || (S.stackRec[stk.cur.id] = { first: Date.now(), sec: 0 });
+      rec.sec += dt;
+    }
+  });
+  function stackCycle() { stackSet(STACKS[(STACKS.indexOf(stk.cur) + 1) % STACKS.length].id); }
+  addChip('chipStack', (short) => (short ? '' : '組み：') + stk.cur.short, stackCycle, () => opened('stack'));
+  PREP.splice(1, 0, ({ row }) => { if (opened('stack')) row('組み方', mini(stk.cur.name, () => { stackCycle(); renderSet(); })); });
+  HOWTO.push(['stack', '組み方：合掌型（ふだん）／井桁型（すぐ大きな火に。減りは早い）／並列型（低くゆっくり。熾がよく育つ）。チップで切り替えます。']);
+  { // 図鑑「薪」のページの下に、組み方の記録
+    const pg = BOOK_PAGES.find((x) => x.id === 'wood'), base = pg.render;
+    pg.render = (pane) => {
+      base(pane);
+      if (!opened('stack')) return;
+      const box = el('div', 'stacks'); box.appendChild(el('h2', '', '組み方'));
+      for (const s of STACKS) {
+        const rec = S.stackRec[s.id], r = el('div', 'stackrow');
+        r.append(el('b', '', s.name), el('span', '', s.desc), el('small', '', rec ? `はじめて：${fmtDate(rec.first)}　／　燃やした時間 ${fmtDur(rec.sec)}` : 'まだ試していない'));
+        box.appendChild(r);
+      }
+      pane.insertBefore(box, pane.querySelector('#detail'));
+    };
+  }
+  for (const s of STACKS) FX['stack-' + s.id] = () => stackSet(s.id, true);
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
