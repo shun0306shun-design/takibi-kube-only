@@ -1267,6 +1267,97 @@
     FX['wood-' + w.id] = () => { const n = S.totalLogs; wfx.forced = w; wfx.preview = true; lastThrow = 0; throwLog(cx); wfx.forced = null; wfx.preview = false; S.totalLogs = n; };
   }
 
+  // ================= 火であぶる（マシュマロ・焼き芋） =================
+  // 串を火にかざし、いい焼き色のときにタップして引き上げる。火が強いほど早く焼ける
+  const ROASTS = {
+    marsh: { name: 'マシュマロ', glyph: 'マ', time: 5.5, raw: 0.5, good: 0.78, perfect: 0.9 },
+    imo:   { name: '焼き芋',     glyph: '芋', time: 11,  raw: 0.58, good: 0.84, perfect: 0.94 },
+  };
+  const RESULTS = { raw: ['生焼けの', [236, 228, 214]], good: ['こんがり', [226, 172, 96]], perfect: ['完璧な', [255, 206, 110]], burnt: ['黒焦げの', [58, 44, 38]] };
+  def('roast', () => ({}));
+  const roast = { on: false, item: 'marsh', p: 0, done: 0, res: null, preview: false, choosing: false };
+  const roastResult = (it, p) => (p < it.raw ? 'raw' : p < it.good ? 'good' : p < it.perfect ? 'perfect' : 'burnt');
+  function roastStart(item, preview) {
+    Object.assign(roast, { on: true, item, p: 0, done: 0, res: null, preview: !!preview, choosing: false });
+    toast('', `${ROASTS[item].name}をあぶる`, 'いい色になったら、画面をタップ', 2800);
+    syncChips();
+  }
+  function roastPull() {
+    if (roast.done) return;
+    const it = ROASTS[roast.item], res = roastResult(it, roast.p);
+    roast.res = res; roast.done = 0.001;
+    let sub = 'プレビュー（記録されません）';
+    if (!roast.preview) {
+      const key = roast.item + '-' + res;
+      const rec = S.roast[key] || (S.roast[key] = { n: 0, first: Date.now() });
+      rec.n++; if (rec.n === 1) { S.unseen = true; syncButtons(); }
+      sub = rec.n === 1 ? 'はじめて！ 図鑑の「あぶり」に記録' : `${rec.n}回目`;
+      save();
+    }
+    toast('', RESULTS[res][0] + it.name, sub, 3600);
+    if (res === 'perfect') { Sound.chime(2); haptic([20, 40, 20]); emberBurst(cx, baseY - 30 * U, 10, 0.8); }
+    else if (res === 'burnt') Sound.tone(180, 70, 0.3, 0.2);
+    else Sound.tone(660, 880, 0.18, 0.1);
+  }
+  TAP_GUARD.push(() => { if (!roast.on) return false; roastPull(); return true; });
+  HOOKS.update.push((dt) => {
+    if (roast.on) {
+      if (roast.done) { roast.done += dt; if (roast.done > 1.6) { roast.on = false; syncChips(); } }
+      else {
+        roast.p += dt * (0.3 + 1.4 * Math.min(1, I)) / ROASTS[roast.item].time;
+        if (roast.p >= 1.3 || S.fuel < 5) roastPull(); // 放っておくと黒焦げ／火が消えたらそこまで
+      }
+    }
+    const can = S.fuel >= 20;
+    if (can !== roast.can) { roast.can = can; if (!can) roast.choosing = false; syncChips(); }
+  });
+  function roastColor(item, p) {
+    const stops = item === 'marsh'
+      ? [[0, [250, 246, 236]], [0.45, [246, 232, 204]], [0.78, [226, 172, 96]], [0.9, [176, 110, 52]], [1.05, [44, 32, 26]]]
+      : [[0, [150, 62, 92]], [0.55, [128, 52, 72]], [0.84, [112, 46, 58]], [0.94, [84, 40, 44]], [1.08, [34, 26, 24]]];
+    for (let i = 1; i < stops.length; i++) if (p <= stops[i][0]) return mix(stops[i - 1][1], stops[i][1], (p - stops[i - 1][0]) / (stops[i][0] - stops[i - 1][0]));
+    return stops[stops.length - 1][1];
+  }
+  HOOKS.front.push(() => {
+    if (!roast.on) return;
+    const it = ROASTS[roast.item], k = roast.done ? Math.min(1, roast.done / 0.5) : 0, e = k * k * (3 - 2 * k);
+    const tx = cx + (36 + 46 * e) * U, ty = baseY - (40 + 54 * e) * U + Math.sin(T * 2.2) * 2 * U, sx = cx + 170 * U, sy = baseY + 96 * U;
+    g.strokeStyle = '#3a2a1c'; g.lineWidth = 3 * U; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(sx, sy); g.lineTo(tx, ty); g.stroke();
+    const p = roast.p, c = roastColor(roast.item, p), sc = 1 + 0.5 * e;
+    g.save(); g.translate(tx, ty); g.rotate(-0.5); g.scale(sc, sc);
+    g.fillStyle = rgb(c);
+    if (roast.item === 'marsh') { rr(-11 * U, -9 * U, 22 * U, 18 * U, 6 * U); g.fill(); }
+    else {
+      g.beginPath(); g.ellipse(0, 0, 19 * U, 9 * U, 0, 0, TAU); g.fill();
+      const open = clamp((p - 0.45) / 0.45, 0, 1) * (p > 1 ? Math.max(0, 1 - (p - 1) * 6) : 1); // 割れ目から黄金色がのぞく
+      if (open > 0) { g.fillStyle = rgba([250, 200, 90], 0.95); g.beginPath(); g.ellipse(0, -1 * U, 13 * U * open, 3.4 * U * open, 0, 0, TAU); g.fill(); }
+    }
+    g.restore();
+    g.globalCompositeOperation = 'lighter';
+    blob(PAL[palName()].glow, tx, ty, 26 * U, 0.25 * lit); // 火の照り返し
+    if (!roast.done && roastResult(it, p) === 'perfect') blob([255, 250, 220], tx - 6 * U, ty - 7 * U, (5 + 3 * Math.sin(T * 18)) * U, 0.9); // 食べごろのきらめき
+    if (p > 1.02) for (let i = 0; i < 3; i++) blob([255, 140, 40], tx + rnd(-6, 6) * U, ty - rnd(4, 16) * U, rnd(5, 9) * U, 0.5); // 燃えてしまった
+    g.globalCompositeOperation = 'source-over';
+  });
+  const chipRoast = addChip('chipRoast', 'あぶる', () => { roast.choosing = true; syncChips(); });
+  const chipPick = Object.keys(ROASTS).map((id) => addChip('chipR-' + id, ROASTS[id].name, () => roastStart(id)));
+  const chipBack = addChip('chipRBack', 'やめる', () => { roast.choosing = false; syncChips(); });
+  function syncChips() {
+    const idle = !roast.on && !roast.choosing;
+    for (const c of $('chips').children) c.hidden = !idle;
+    chipRoast.hidden = !(idle && roast.can);
+    for (const c of chipPick) c.hidden = !roast.choosing;
+    chipBack.hidden = !roast.choosing;
+  }
+  HOOKS.boot.push(syncChips);
+  BOOK_PAGES.push({ id: 'roast', label: 'あぶり', render: (pane) => cardPage(pane, 'roast', 'あぶり', Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
+    id: id + '-' + res, name: RESULTS[res][0] + ROASTS[id].name, glyph: ROASTS[id].glyph, css: orbOf(roastColor(id, { raw: 0.2, good: 0.75, perfect: 0.86, burnt: 1.2 }[res])),
+    rec: S.roast[id + '-' + res], desc: { raw: 'まだ早かった。中は冷たい。', good: 'いい焼き色。ふつうにおいしい。', perfect: 'これ以上ない焼き加減。', burnt: '炭になった。これも思い出。' }[res],
+    hint: '火であぶり、引き上げるタイミングで仕上がりが変わる。',
+  }))), '回') });
+  for (const id of Object.keys(ROASTS)) FX['roast-' + id] = () => roastStart(id, true);
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(now) {

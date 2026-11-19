@@ -147,7 +147,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: 18px; color: #fff; text-shadow: 0 1px 4px rgba(0, 0, 0, .7);
 }
 .card.lock .orb { background: #2b2623 !important; box-shadow: none !important; color: #776c62; text-shadow: none; }
-.card .nm { display: block; font-size: 12.5px; }
+.card .nm { display: block; font-size: 12.5px; line-height: 1.3; }
 .card .ct { display: block; font-size: 10px; color: var(--dim); }
 .card .st { font-style: normal; color: #ffcf7a; letter-spacing: .1em; }
 .card.lock .nm { color: var(--dim); }
