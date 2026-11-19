@@ -273,7 +273,7 @@
   }
 
   // 山・森・地面のシルエット。夜用と朝用を同じ形で2枚作り、クロスフェードする
-  function makeLayer(day) {
+  function makeLayer(day, snow) {
     const c = document.createElement('canvas');
     c.width = Math.round(W * DPR); c.height = Math.round(H * DPR);
     const x = c.getContext('2d'); x.scale(DPR, DPR);
@@ -281,6 +281,11 @@
     const col = day
       ? { far: '#93abc4', mid: '#4d7268', near: '#1f3d34', g0: '#46503a', g1: '#171d15', tuft: 'rgba(120,150,90,.5)' }
       : { far: '#0f1536', mid: '#090d20', near: '#03040a', g0: '#100d0e', g1: '#020202', tuft: 'rgba(40,44,52,.6)' };
+    if (snow) { // 雪景色
+      Object.assign(col, day
+        ? { far: '#cbd8e6', mid: '#86a09e', near: '#3c5852', g0: '#eef2f6', g1: '#a3b3c4', tuft: 'rgba(255,255,255,.7)' }
+        : { far: '#1a2246', mid: '#141a36', near: '#070914', g0: '#3c4670', g1: '#12162c', tuft: 'rgba(130,140,180,.5)' });
+    }
     const p1 = R() * TAU, p2 = R() * TAU;
     x.fillStyle = col.far; x.beginPath(); x.moveTo(0, H);
     for (let px = 0; px <= W + 4; px += 4) {
@@ -318,6 +323,7 @@
       for (const d of [-0.5, 0, 0.5]) { x.moveTo(tx, ty); x.lineTo(tx + d * th, ty - th * (1 - Math.abs(d) * 0.4)); }
       x.stroke();
     }
+    if (snow) { x.fillStyle = day ? 'rgba(70,62,50,.75)' : 'rgba(14,12,14,.8)'; x.beginPath(); x.ellipse(W / 2, baseY + 12 * U, 128 * U, 36 * U, 0, 0, TAU); x.fill(); } // 火のまわりだけ雪がとけている
     x.fillStyle = 'rgba(0,0,0,.4)'; // 灰床
     x.beginPath(); x.ellipse(W / 2, baseY + 10 * U, 84 * U, 23 * U, 0, 0, TAU); x.fill();
     return c;
@@ -1100,7 +1106,7 @@
   function renderSet() {
     const pane = $('paneSet'); pane.textContent = '';
     pane.appendChild(el('h2', '', '設定'));
-    const row = (label, ctl) => { const r = el('div', 'row'); r.append(el('span', '', label), ctl); pane.appendChild(r); };
+    const row = (label, ctl) => { const r = el('div', 'row'); r.append(el('span', '', label), ctl); pane.appendChild(r); return r; };
     const tog = (v, fn) => { const b = el('button', 'tog' + (v ? ' on' : '')); b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(v)); b.addEventListener('click', () => { fn(!v); renderSet(); }); return b; };
     row('音（焚き火の音・効果音）', tog(S.set.sound, setSound));
     if (navigator.vibrate) row('振動', tog(S.set.vib, (v) => { S.set.vib = v; save(); }));
@@ -1456,6 +1462,141 @@
   }
   HOOKS.ground.push((day) => drawVisitor(true, day));
   HOOKS.front.push((day) => drawVisitor(false, day));
+
+  // ================= 天気と季節 =================
+  // 天気はときどき変わる（設定で固定もできる）。季節は端末の日付で決まる
+  const WX_NAME = { clear: '晴れ', rain: '雨', snow: '雪', fog: '霧' };
+  const SEASON_NAME = { spring: '春', summer: '夏', autumn: '秋', winter: '冬' };
+  def('weather', () => ({ kind: 'clear', until: Date.now() + 5 * 60000 }));
+  def('wx', () => 'auto', true);
+  const wxs = { rain: 0, snow: 0, fog: 0, ground: -1, afterRain: 0, force: null, season: null, check: 0, acc: 0, layers: {} };
+  const wps = [], flies = [];
+  const seasonNow = () => wxs.season || ['winter', 'winter', 'spring', 'spring', 'spring', 'summer', 'summer', 'summer', 'autumn', 'autumn', 'autumn', 'winter'][new Date().getMonth()];
+  const wxKind = () => wxs.force || (S.set.wx !== 'auto' ? S.set.wx : S.weather.kind);
+  function nextWeather() {
+    const se = seasonNow();
+    const w = { clear: 60, fog: 12, rain: { spring: 16, summer: 20, autumn: 16, winter: 4 }[se], snow: se === 'winter' ? 26 : 0 };
+    let x = Math.random() * (w.clear + w.fog + w.rain + w.snow), kind = 'clear';
+    for (const k of Object.keys(w)) { if ((x -= w[k]) < 0) { kind = k; break; } }
+    S.weather = { kind, until: Date.now() + rnd(6, 18) * 60000 };
+    dirty = true;
+  }
+  let lastKind = null;
+  HOOKS.update.push((dt, real) => {
+    wxs.check -= real;
+    if (wxs.check <= 0) {
+      wxs.check = 1;
+      if (Date.now() > S.weather.until) nextWeather();
+      const k = wxKind();
+      if (lastKind === 'rain' && k !== 'rain') wxs.afterRain = 300; // 雨上がり
+      lastKind = k;
+      setStatus('wx', `${SEASON_NAME[seasonNow()]}・${WX_NAME[k]}`);
+    }
+    if (wxs.afterRain > 0) wxs.afterRain -= dt;
+    const k = wxKind(), se = seasonNow(), ease = (v, to, r) => (to > v ? Math.min(to, v + dt * r) : Math.max(to, v - dt * r));
+    wxs.rain = ease(wxs.rain, k === 'rain' ? 1 : 0, 0.3);
+    wxs.snow = ease(wxs.snow, k === 'snow' ? 1 : 0, 0.3);
+    wxs.fog = ease(wxs.fog, k === 'fog' ? 1 : 0, 0.2);
+    const gt = k === 'snow' || se === 'winter' ? 1 : 0;
+    wxs.ground = wxs.ground < 0 ? gt : ease(wxs.ground, gt, 0.12);
+
+    // 降るもの・舞うもの（数に上限あり）
+    const calm = k === 'clear';
+    wxs.acc += dt;
+    const spawn = (rate, make) => { let n = rate * dt + Math.random(); n = n >= 1 ? Math.floor(n) : 0; while (n-- > 0 && wps.length < 150) wps.push(make()); };
+    if (wxs.rain > 0.05) spawn(110 * wxs.rain, () => ({ t: 'rain', x: rnd(-30, W + 80), y: -20, vx: -130 * U, vy: rnd(760, 980) * U, len: rnd(12, 22) * U, a: rnd(0.18, 0.4) }));
+    if (wxs.snow > 0.05) spawn(22 * wxs.snow, () => ({ t: 'snow', x: rnd(-10, W + 10), y: -6, vx: 0, vy: rnd(36, 78) * U, s: rnd(1.2, 2.8) * U, ph: rnd(0, TAU), a: rnd(0.6, 1) }));
+    if (calm && se === 'spring') spawn(1.4, () => ({ t: 'petal', x: rnd(-10, W + 40), y: -8, vx: -rnd(10, 30) * U, vy: rnd(26, 46) * U, s: rnd(2.6, 4) * U, ph: rnd(0, TAU), a: 0.9, c: pick([[255, 196, 214], [255, 220, 230], [250, 170, 196]]) }));
+    if (calm && se === 'autumn') spawn(1.1, () => ({ t: 'leaf', x: rnd(-10, W + 40), y: -8, vx: -rnd(8, 34) * U, vy: rnd(34, 60) * U, s: rnd(3.2, 5) * U, ph: rnd(0, TAU), a: 0.95, c: pick([[214, 96, 34], [196, 60, 36], [226, 160, 50], [150, 84, 40]]) }));
+    for (let i = wps.length - 1; i >= 0; i--) {
+      const p = wps[i];
+      if (p.t !== 'rain') { p.ph += dt * 2.2; p.x += Math.sin(p.ph) * 16 * U * dt; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      const inFire = Math.abs(p.x - cx) < (24 + 30 * I) * U && p.y > baseY - flameH && p.y < baseY; // 火に入ると消える
+      if (p.y > (p.t === 'rain' ? H : H - 60) || inFire) { wps[i] = wps[wps.length - 1]; wps.pop(); }
+    }
+    // 夏の夜の蛍
+    const wantFlies = se === 'summer' && dayTarget === 0 && calm ? 12 : 0;
+    while (flies.length < wantFlies) flies.push({ x: rnd(0, W), y: rnd(horizon - 60 * U, baseY + 60 * U), ph: rnd(0, TAU), sp: rnd(0.4, 1), a: 0 });
+    for (let i = flies.length - 1; i >= 0; i--) {
+      const p = flies[i];
+      p.ph += dt * p.sp;
+      p.x += Math.cos(p.ph * 1.7) * 14 * U * dt; p.y += Math.sin(p.ph * 2.3) * 9 * U * dt;
+      p.a = ease(p.a, i < wantFlies ? 1 : 0, 0.5);
+      if (p.a <= 0 && i >= wantFlies) flies.splice(i, 1);
+    }
+    // 雨: 火に落ちた雨粒がじゅっと鳴り、湯気が立つ
+    if (wxs.rain > 0.5 && lit > 0.3 && Math.random() < dt * 2.2) {
+      Sound.noise(rnd(0.05, 0.14), 'highpass', rnd(3000, 6000), 0.07, 1.4);
+      if (smokes.length < 60) smokes.push({ x: cx + rnd(-26, 26) * U, y: baseY - rnd(10, 40) * U, vx: rnd(-8, 8) * U, vy: -rnd(30, 50) * U, life: rnd(1.5, 2.6), age: 0, size: rnd(8, 14) * U });
+    }
+    if (fx.gekko) { fx.gekko.age += dt; if (fx.gekko.age > 28) fx.gekko = null; }
+    if (fx.dustT > 0) {
+      fx.dustT -= dt;
+      if (Math.random() < dt * 34) addSpark(rnd(0, W), rnd(0, baseY), rnd(-6, 6) * U, rnd(4, 14) * U, rnd(0.7, 1.6), rnd(1, 2.2) * U, pick([[255, 255, 255], [220, 240, 255], [255, 244, 220]]), 6);
+    }
+  });
+  BURN_MUL.push(() => 1 + 0.25 * wxs.rain); // 雨の日は薪の減りが少し早い
+  HOOKS.sky.push((day) => {
+    const cloud = Math.max(wxs.rain, wxs.fog * 0.7, wxs.snow * 0.8);
+    if (cloud > 0.01) { g.globalAlpha = 0.6 * cloud; g.fillStyle = rgb(mix([10, 12, 22], [150, 158, 170], day)); g.fillRect(-9, -9, W + 18, horizon + 30); g.globalAlpha = 1; }
+    if (fx.gekko) { // 月虹: 白っぽく淡い虹
+      const a = clamp(fx.gekko.age / 4, 0, 1) * clamp((28 - fx.gekko.age) / 5, 0, 1);
+      const cols = ['255,235,235', '255,246,226', '250,252,236', '232,250,240', '228,238,255', '236,232,255'], lw = 4.4 * U;
+      g.lineWidth = lw + 0.6; g.lineCap = 'butt';
+      cols.forEach((c, i) => { g.strokeStyle = `rgba(${c},${0.3 * a})`; g.beginPath(); g.arc(W * 0.5, horizon + 40 * U, W * 0.58 - i * lw, Math.PI, TAU); g.stroke(); });
+    }
+  });
+  HOOKS.ground.push((day) => {
+    if (wxs.ground <= 0.01) return;
+    const get = (key, d) => wxs.layers[key] || (wxs.layers[key] = makeLayer(d, true));
+    if (day < 1) { g.globalAlpha = wxs.ground; g.drawImage(get('n', false), 0, 0, W, H); }
+    if (day > 0) { g.globalAlpha = wxs.ground * day; g.drawImage(get('d', true), 0, 0, W, H); }
+    g.globalAlpha = 1;
+  });
+  HOOKS.resize.push(() => { wxs.layers = {}; wps.length = 0; flies.length = 0; });
+  HOOKS.top.push((day) => {
+    if (wxs.rain > 0.01) { g.globalAlpha = 0.2 * wxs.rain; g.fillStyle = '#04060e'; g.fillRect(-9, -9, W + 18, H + 18); }
+    g.lineCap = 'round'; g.lineWidth = Math.max(1, 1.1 * U);
+    for (const p of wps) {
+      if (p.t === 'rain') { g.globalAlpha = p.a; g.strokeStyle = '#b4c6e4'; g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x + p.vx / p.vy * p.len, p.y + p.len); g.stroke(); }
+      else if (p.t === 'snow') { g.globalAlpha = p.a; g.fillStyle = '#fff'; g.beginPath(); g.arc(p.x, p.y, p.s, 0, TAU); g.fill(); }
+      else { g.globalAlpha = p.a; g.fillStyle = rgb(mix(p.c, [20, 18, 34], 0.35 * (1 - day))); g.beginPath(); g.ellipse(p.x, p.y, p.s, p.s * (0.25 + 0.3 * Math.abs(Math.sin(p.ph * 1.3))), p.ph, 0, TAU); g.fill(); }
+    }
+    if (flies.length) {
+      g.globalCompositeOperation = 'lighter';
+      for (const p of flies) blob([200, 255, 120], p.x, p.y, 6 * U, p.a * Math.max(0, Math.sin(p.ph * 3)) * 0.9);
+      g.globalCompositeOperation = 'source-over';
+    }
+    if (wxs.fog > 0.01) { // 霧: ゆっくり流れる白い帯
+      const fc = mix([70, 76, 92], [226, 230, 236], day), sp = sprite(fc);
+      g.globalAlpha = 0.2 * wxs.fog; g.fillStyle = rgb(fc); g.fillRect(-9, -9, W + 18, H + 18);
+      g.globalAlpha = 0.34 * wxs.fog;
+      for (let i = 0; i < 4; i++) {
+        const w = W * 1.5, x = ((T * (5 + i * 3) * U + i * W * 0.55) % (W + w)) - w, y = horizon - 60 * U + i * 58 * U;
+        g.drawImage(sp, x, y - 70 * U, w, 140 * U);
+      }
+    }
+    g.globalAlpha = 1;
+  });
+  addRare({ id: 'gekko', name: '月虹', star: 3, glyph: '虹', orb: ['#ffffff', '#b8c8e8', '#1c2444'], on: 'amb', kind: 'gekko', sky: 'night', p: 0.02,
+    ok: () => wxs.afterRain > 0 && wxKind() === 'clear',
+    desc: '雨上がりの夜、月の光がつくる白い虹。', hint: '夜、雨が上がったあとの数分だけ…。' });
+  addRare({ id: 'dust', name: 'ダイヤモンドダスト', star: 2, glyph: '晶', orb: ['#ffffff', '#cfe8ff', '#6f9ccc'], on: 'amb', kind: 'dust', sky: 'day', p: 0.006,
+    ok: () => wxs.ground > 0.8 && wxKind() !== 'rain' && wxKind() !== 'fog',
+    desc: '凍った朝の空気が、光の粒になってきらめく。', hint: '雪景色の朝に、まれに…。' });
+  fx.gekko = null; fx.dustT = 0;
+  BUSY.gekko = () => !!fx.gekko;
+  BUSY.dust = () => fx.dustT > 0;
+  TRIG.gekko = () => { fx.gekko = { age: 0 }; };
+  TRIG.dust = () => { fx.dustT = 22; };
+  SET_ROWS.push(({ row, seg, head }) => {
+    head('天気と季節');
+    row('天気', seg(S.set.wx, [['auto', '自動'], ['clear', '晴れ'], ['rain', '雨'], ['snow', '雪'], ['fog', '霧']], (v) => { S.set.wx = v; wxs.check = 0; save(); })).classList.add('stack');
+    row('季節（端末の日付）', el('span', 'val', SEASON_NAME[seasonNow()]));
+  });
+  for (const k of Object.keys(WX_NAME)) FX['wx-' + k] = () => { wxs.force = k; wxs.check = 0; };
+  for (const k of Object.keys(SEASON_NAME)) FX['season-' + k] = () => { wxs.season = k; wxs.check = 0; wxs.force = wxs.force || 'clear'; };
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
