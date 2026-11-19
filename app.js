@@ -70,7 +70,7 @@
   function addRare(r) { RARES.push(r); RMAP[r.id] = r; }
   const starStr = (r) => r.stars || '★'.repeat(r.star);
   // あとから足す機能が差し込む口（更新・描画の各段階、薪を投げた/落ちた、図鑑に新しく載った、起動時）
-  const HOOKS = { update: [], sky: [], ground: [], front: [], top: [], thrown: [], land: [], found: [], resize: [], boot: [] };
+  const HOOKS = { update: [], sky: [], ground: [], front: [], top: [], thrown: [], land: [], found: [], resize: [], boot: [], back: [] };
   const run = (name, a, b) => { for (const fn of HOOKS[name]) fn(a, b); };
   const TRIG = {}, BUSY = {}, FX = {}, TAP_GUARD = [], BURN_MUL = [], RARE_MUL = [];
   const BOOK_PAGES = [], SET_ROWS = [], STATS = [];
@@ -108,7 +108,7 @@
     if (S.fuel <= 0 || sec <= 0) return;
     S.fuel = Math.max(0, (S.fuel + BURN_A / BURN_B) * Math.exp(-BURN_B * sec) - BURN_A / BURN_B);
   }
-  const awaySec = (Date.now() - S.lastSeen) / 1000;
+  const awaySec = (Date.now() - S.lastSeen) / 1000, awayFuel0 = S.fuel;
   decayAway(awaySec);
 
   // ================= 音（WebAudioで合成。素材ファイルなし） =================
@@ -1165,7 +1165,10 @@
   let hiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { hiddenAt = Date.now(); endFeed(); save(); Sound.pause(true); }
-    else { if (hiddenAt) decayAway((Date.now() - hiddenAt) / 1000); hiddenAt = 0; lastT = 0; Sound.pause(false); }
+    else {
+      if (hiddenAt) { const sec = (Date.now() - hiddenAt) / 1000, f0 = S.fuel; decayAway(sec); run('back', sec, f0); }
+      hiddenAt = 0; lastT = 0; Sound.pause(false);
+    }
   });
   window.addEventListener('pagehide', save);
   let resizeT = 0;
@@ -1597,6 +1600,56 @@
   });
   for (const k of Object.keys(WX_NAME)) FX['wx-' + k] = () => { wxs.force = k; wxs.check = 0; };
   for (const k of Object.keys(SEASON_NAME)) FX['season-' + k] = () => { wxs.season = k; wxs.check = 0; wxs.force = wxs.force || 'clear'; };
+
+  // ================= 留守のあいだに・今日の一本・称号 =================
+  // 戻ってきたとき、離れていた間の火の様子と、その間に来た訪問者を短く伝える
+  function awayReport(sec, f0) {
+    if (sec < 180 || S.totalLogs === 0) return;
+    const k = BURN_A / BURN_B;
+    const burnT = f0 < 5 ? 0 : Math.min(sec, Math.log((f0 + k) / (5 + k)) / BURN_B); // 種火以上で燃えていた時間
+    const lines = [];
+    if (f0 < 5) lines.push('火は熾火のまま、静かに待っていました。');
+    else if (S.fuel >= 5) lines.push(`${fmtDur(sec)}のあいだ、火は燃えつづけていました。`);
+    else lines.push(`火は${fmtDur(burnT)}ほど燃えて、熾火になりました。`);
+    const came = [], sky = dayTarget ? 'day' : 'night';
+    for (let tick = Math.min(3000, Math.floor(burnT / 10)); tick > 0 && came.length < 2; tick--) { // 燃えていた間の10秒ごとの抽選を、同じ確率でまとめて行う
+      let x = Math.random();
+      for (const v of VISITORS) {
+        if (f0 < 20 || (v.sky && v.sky !== sky) || came.includes(v)) continue;
+        if (x < v.p * 0.7) { came.push(v); break; }
+        x -= v.p * 0.7;
+      }
+    }
+    const when = Date.now() - sec * 500;
+    for (const v of came) recordRare(v.id, when, true);
+    if (came.length) lines.push(`${came.map((v) => v.name).join('と')}が、火にあたっていったようです。`);
+    addLogText('留守のあいだに：' + lines.join(''));
+    save();
+    showNote('留守のあいだに', lines, { ms: 14000 });
+  }
+  HOOKS.boot.push(() => awayReport(awaySec, awayFuel0));
+  HOOKS.back.push(awayReport);
+  FX.away = () => showNote('留守のあいだに', ['火は12分ほど燃えて、熾火になりました。', 'キツネが、火にあたっていったようです。'], { ms: 14000 });
+
+  // 今日の一本: その日に1本でもくべれば連続日数が伸びる。途切れても何も失わない（表示だけ）
+  const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const TITLES = [[100000, '炎の主'], [10000, '火守り'], [1000, '焚き火番'], [100, '薪くべ人'], [0, '火おこし見習い']];
+  const titleOf = (n) => TITLES.find((t) => n >= t[0])[1];
+  def('streak', () => ({ day: '', n: 0, best: 0 }));
+  const streakNow = () => (S.streak.day === dayKey(Date.now()) || S.streak.day === dayKey(Date.now() - 86400000) ? S.streak.n : 0);
+  HOOKS.thrown.push(() => {
+    const today = dayKey(Date.now()), st = S.streak;
+    if (wfx.preview || st.day === today) return;
+    st.n = st.day === dayKey(Date.now() - 86400000) ? st.n + 1 : 1;
+    st.day = today; st.best = Math.max(st.best, st.n);
+    save();
+    setTimeout(() => toast('', '今日の一本', st.n > 1 ? `連続 ${st.n}日目` : 'きょうも火がつきました', 3000), 2900);
+  });
+  STATS.push((stat) => {
+    stat('称号', titleOf(S.totalLogs));
+    stat('今日の一本（連続）', `${streakNow()}日`);
+    stat('これまでの最長', `${S.streak.best}日`);
+  });
 
   // ================= 起動 =================
   let lastT = 0, halted = false;
