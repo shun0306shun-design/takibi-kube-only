@@ -236,7 +236,20 @@
     };
   })();
 
-  function haptic(p) { if (S.set.vib && navigator.vibrate) { try { navigator.vibrate(p); } catch (e) { /* 非対応 */ } } }
+  // 演出のつよさ「しずか／にぎやか」。しずか は見た目・音・振動の強さだけを変える（確率・記録・できることは、にぎやかと同じ）。
+  // 揺れ・明るさ・スロー・花火・効果音の数は、必ずここを通す
+  const calm = () => !!S.set.calm;
+  const feel = {
+    shake(v) { if (!calm()) fx.shake = Math.max(fx.shake, v); },
+    bright(v) { fx.bright = Math.max(fx.bright, calm() ? v * 0.3 : v); },
+    slow(t) { if (!calm()) fx.slowT = t; },
+    chime(star) { Sound.chime(calm() ? 0 : star); }, // しずか は2音まで
+    fireworks(n) { if (calm()) return; const busy = fx.fwBusy; launchFireworks(n, false); fx.fwBusy = busy; }, // お祝いの花火は、レアの花火の抽選を邪魔しない
+  };
+  function haptic(p, isThrow) { // しずか のときは、くべたときの短い1回だけ
+    if (!S.set.vib || !navigator.vibrate || (calm() && !isThrow)) return;
+    try { navigator.vibrate(p); } catch (e) { /* 非対応 */ }
+  }
 
   // ================= キャンバスと風景 =================
   const app = $('app'), cv = $('scene');
@@ -446,7 +459,7 @@
     };
     flying.push(L);
     run('thrown', L, !!auto);
-    hideHint(); haptic(8);
+    hideHint(); haptic(8, true);
   }
   function landLog(L) {
     S.fuel = Math.min(100, S.fuel + L.fuel);
@@ -523,10 +536,10 @@
   }
   function announce(r, sub, cls) {
     toast(starStr(r), r.name, sub, 5200, cls);
-    Sound.chime(Math.min(3, Math.round(r.star)));
+    feel.chime(Math.min(3, Math.round(r.star)));
     // ★の数で出方を変える: ★ トーストのみ ／ ★★ 画面がふわっと明るく ／ ★★★ 一瞬のスローと揺れ、決めの音
-    if (r.star >= 2) fx.bright = Math.max(fx.bright, 0.2);
-    if (r.star >= 3) { fx.slowT = 0.8; fx.shake = 4; Sound.tone(196, 98, 0.9, 0.2); Sound.tone(1568, 1568, 1.4, 0.06, 0.1); }
+    if (r.star >= 2) feel.bright(0.2);
+    if (r.star >= 3) { feel.slow(0.8); feel.shake(4); if (!calm()) { Sound.tone(196, 98, 0.9, 0.2); Sound.tone(1568, 1568, 1.4, 0.06, 0.1); } }
     haptic(r.star >= 3 ? [40, 60, 40, 60, 120] : r.star >= 2 ? [30, 50, 30] : 20);
   }
 
@@ -1147,6 +1160,14 @@
     pane.appendChild(el('h2', '', '設定'));
     const row = (label, ctl) => { const r = el('div', 'row'); r.append(el('span', '', label), ctl); pane.appendChild(r); return r; };
     const tog = (v, fn) => { const b = el('button', 'tog' + (v ? ' on' : '')); b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', String(v)); b.addEventListener('click', () => { fn(!v); renderSet(); }); return b; };
+    const seg3 = (cur, opts, fn) => { // [値, 表示] の並びから切り替えボタンを作る
+      const s = el('div', 'seg');
+      for (const [v, label] of opts) { const b = el('button', cur === v ? 'on' : '', label); b.addEventListener('click', () => { fn(v); renderSet(); }); s.appendChild(b); }
+      return s;
+    };
+    const head = (t) => { pane.appendChild(el('h2', '', t)).style.marginTop = '20px'; };
+    const api = { pane, row, tog, seg: seg3, head };
+    for (const fn of SET_TOP) fn(api);
     row('音（焚き火の音・効果音）', tog(S.set.sound, setSound));
     if (navigator.vibrate) row('振動', tog(S.set.vib, (v) => { S.set.vib = v; save(); }));
     const seg = el('div', 'seg');
@@ -1156,13 +1177,7 @@
       seg.appendChild(b);
     }
     row('空', seg);
-    const seg3 = (cur, opts, fn) => { // [値, 表示] の並びから切り替えボタンを作る
-      const s = el('div', 'seg');
-      for (const [v, label] of opts) { const b = el('button', cur === v ? 'on' : '', label); b.addEventListener('click', () => { fn(v); renderSet(); }); s.appendChild(b); }
-      return s;
-    };
-    const head = (t) => { pane.appendChild(el('h2', '', t)).style.marginTop = '20px'; };
-    for (const fn of SET_ROWS) fn({ pane, row, tog, seg: seg3, head });
+    for (const fn of SET_ROWS) fn(api);
     pane.appendChild(el('h2', '', 'きろく')).style.marginTop = '20px';
     const dl = el('dl', 'stats');
     const stat = (k, v) => dl.append(el('dt', '', k), el('dd', '', v));
@@ -1829,23 +1844,23 @@
     combo.n = combo.last && gap >= 0.3 && gap <= 0.8 ? combo.n + 1 : 1;
     combo.last = now;
     L.combo = combo.n;
-    L.sparks *= 1 + Math.min(1.5, combo.n / 40);
+    if (!calm()) L.sparks *= 1 + Math.min(1.5, combo.n / 40);
     if (combo.n > S.maxCombo) S.maxCombo = combo.n;
   });
   function comboBurst(n) {
     emberBurst(cx, baseY - 20 * U, Math.min(90, 30 + n * 0.6), 1.4); flare = 0.9;
-    Sound.chime(n >= 50 ? 3 : 2); haptic(n >= 100 ? [30, 40, 30, 40, 80] : 25);
-    if (n >= 100) { fx.shake = 3; fx.bright = Math.max(fx.bright, 0.18); }
+    feel.chime(n >= 50 ? 3 : 2); haptic(n >= 100 ? [30, 40, 30, 40, 80] : 25);
+    if (n >= 100) { feel.shake(3); feel.bright(0.18); }
   }
   HOOKS.land.push((L) => {
-    if (!(L.combo >= 2)) return;
+    if (!(L.combo >= 2) || calm()) return; // しずか: 音程の上昇も節目の弾けもなし（最高コンボの記録は続く）
     const f = 330 * Math.pow(2, Math.min(L.combo, 60) / 24); // コンボが伸びるほど音程が上がる
     Sound.tone(f, f, 0.14, 0.08, 0, 'triangle');
     if ([10, 30, 50, 100].includes(L.combo)) comboBurst(L.combo);
   });
   HOOKS.update.push(() => {
     if (combo.n && performance.now() - combo.last > 850) combo.n = 0; // リズムが途切れた
-    const show = combo.n >= 3 ? combo.n : 0;
+    const show = combo.n >= 3 && !calm() ? combo.n : 0;
     if (show === combo.shown) return;
     combo.shown = show;
     if (show) { elCombo.textContent = `${show} combo`; elCombo.classList.remove('bump'); void elCombo.offsetWidth; elCombo.classList.add('on', 'bump'); }
@@ -1860,30 +1875,34 @@
   const fever = { gauge: 0, t: 0, ring: -1 };
   const elFever = $('fever');
   function feverStart() {
-    fever.t = 15; fever.gauge = 0; flare = 0.9; fx.bright = Math.max(fx.bright, 0.2);
+    fever.t = 15; fever.gauge = 0;
+    if (calm()) { setStatus('fever', '業火'); return; } // しずか: 中身は同じ。知らせは上部の小さな文字だけ
+    flare = 0.9; feel.bright(0.2);
     btnFeed.classList.add('fever');
     toast('', '業火タイム', '15秒のあいだ、レアな出来事が3倍起きやすい', 3200);
     for (let i = 0; i < 5; i++) Sound.tone(392 * Math.pow(2, i / 5), 392 * Math.pow(2, i / 5), 0.5, 0.08, i * 0.07, 'triangle');
     haptic([30, 30, 30, 30, 60]);
   }
   function feverEnd() { // 火の粉が空へ一斉に舞い上がって締めくくる
-    fever.t = 0; btnFeed.classList.remove('fever');
-    for (let i = 0; i < 90; i++) addSpark(cx + rnd(-50, 50) * U, baseY - rnd(0, flameH), rnd(-40, 40) * U, -rnd(160, 420) * U, rnd(1.6, 3.4), rnd(1.2, 2.6) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), -30);
-    Sound.tone(880, 220, 1.2, 0.07); Sound.crackle(2);
+    fever.t = 0; btnFeed.classList.remove('fever'); setStatus('fever', '');
+    const quiet = calm();
+    for (let i = 0; i < (quiet ? 22 : 90); i++) addSpark(cx + rnd(-50, 50) * U, baseY - rnd(0, flameH), rnd(-40, 40) * U, -rnd(160, 420) * U, rnd(1.6, 3.4), rnd(1.2, 2.6) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), -30);
+    if (!quiet) { Sound.tone(880, 220, 1.2, 0.07); Sound.crackle(2); }
   }
   RARE_MUL.push(() => (fever.t > 0 ? 3 : 1));
   HOOKS.update.push((dt) => {
     if (fever.t > 0) {
       fever.t -= dt;
-      if (Math.random() < dt * 14) addSpark(cx + rnd(-1, 1) * 40 * U, baseY - rnd(6, flameH * 0.6), rnd(-24, 24) * U, -rnd(70, 190) * U, rnd(0.9, 2.4), rnd(1, 2.4) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), -12); // 火の粉が倍に
-      if (Math.random() < dt * 9) Sound.crackle(1.5);                                                           // 音もにぎやかに
-      if (Math.random() < dt * 1.6) { const f = pick([1047, 1319, 1568, 2093]); Sound.tone(f, f, 0.4, 0.03); }
+      if (calm()) { fx.tint = 'gold'; fx.tintT = 0.4; } // しずか: 炎はうっすら金色。火の粉と音の上乗せなし
+      else if (Math.random() < dt * 14) addSpark(cx + rnd(-1, 1) * 40 * U, baseY - rnd(6, flameH * 0.6), rnd(-24, 24) * U, -rnd(70, 190) * U, rnd(0.9, 2.4), rnd(1, 2.4) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), -12); // 火の粉が倍に
+      if (!calm() && Math.random() < dt * 9) Sound.crackle(1.5);                                                           // 音もにぎやかに
+      if (!calm() && Math.random() < dt * 1.6) { const f = pick([1047, 1319, 1568, 2093]); Sound.tone(f, f, 0.4, 0.03); }
       if (fever.t <= 0) feverEnd();
     } else if (!fx.freeze) {
       fever.gauge = S.fuel >= 90 ? Math.min(1, fever.gauge + dt / 40) : Math.max(0, fever.gauge - dt / 90);
       if (fever.gauge >= 1) feverStart();
     }
-    fx.base = fever.t > 0 ? 'gold' : S.flameColor;
+    fx.base = fever.t > 0 && !calm() ? 'gold' : S.flameColor;
     const ring = Math.round((fever.t > 0 ? fever.t / 15 : fever.gauge) * 200);
     if (ring !== fever.ring) { fever.ring = ring; elFever.style.strokeDashoffset = (309.76 * (1 - ring / 200)).toFixed(1); }
   });
@@ -1911,16 +1930,16 @@
   };
   HOOKS.update.push((dt, real) => {
     const o = fx.omen;
-    fx.hold = !!o && o.age < 0.32; // 火の粉が一瞬止まる
+    fx.hold = !!o && o.age < 0.32 && !calm(); // 火の粉が一瞬止まる
     if (!o) return;
-    o.age += real;
+    o.age += real * (calm() ? 1.55 : 1);       // しずか: 短く
     if (o.id && o.age >= 1.5) { const id = o.id; o.id = null; trigger(id, true); }
     if (o.age >= 2) fx.omen = null;
   });
   HOOKS.front.push(() => {
     const o = fx.omen;
     if (!o) return;
-    const c = OMEN[o.color] || PAL[RAINBOW[Math.floor(o.age * 9) % RAINBOW.length]].edge, a = Math.sin(Math.min(1, o.age / 2) * Math.PI);
+    const c = OMEN[o.color] || PAL[RAINBOW[Math.floor(o.age * 9) % RAINBOW.length]].edge, a = Math.sin(Math.min(1, o.age / 2) * Math.PI) * (calm() ? 0.4 : 1);
     g.globalCompositeOperation = 'lighter';
     blob(c, cx, baseY + 4 * U, (50 + 26 * Math.sin(o.age * 9)) * U, 0.75 * a);
     blob(c, cx + 38 * U, baseY + 11 * U, 13 * U, a); blob([255, 255, 255], cx + 38 * U, baseY + 11 * U, 6 * U, a); // 薪の切り口が光る
@@ -1947,9 +1966,10 @@
   });
   HOOKS.land.push((L) => {
     if (!L.gold) return;
-    S.fuel = 100; flare = 0.9; fx.bright = Math.max(fx.bright, 0.3); // 火力が一気に満タン
-    for (let i = 0; i < 80; i++) { const a = rnd(0, TAU), v = rnd(60, 300) * U; addSpark(cx, baseY - 20 * U, Math.cos(a) * v, Math.sin(a) * v - 120 * U, rnd(1, 2.6), rnd(1.4, 3) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), 70); }
-    for (const [f, w] of [[1318.5, 0], [1975.5, 0.02], [2637, 0.04], [3951, 0.06]]) Sound.tone(f, f, 2.6, 0.07, w); // 澄んだ鐘の音
+    S.fuel = 100; flare = 0.9; feel.bright(0.3); // 火力が一気に満タン
+    if (calm()) Sound.tone(1318.5, 1318.5, 1.6, 0.05); // しずか: やわらかい光と、小さな音ひとつ
+    else for (let i = 0; i < 80; i++) { const a = rnd(0, TAU), v = rnd(60, 300) * U; addSpark(cx, baseY - 20 * U, Math.cos(a) * v, Math.sin(a) * v - 120 * U, rnd(1, 2.6), rnd(1.4, 3) * U, mix(PAL.gold.core, PAL.gold.edge, rnd(0, 1)), 70); }
+    if (!calm()) for (const [f, w] of [[1318.5, 0], [1975.5, 0.02], [2637, 0.04], [3951, 0.06]]) Sound.tone(f, f, 2.6, 0.07, w); // 澄んだ鐘の音
     trigger('kinmaki', L.gold !== 'preview');
   });
   HOOKS.update.push((dt) => { for (const L of flying) if (L.gold && Math.random() < dt * 40) addSpark(L.x, L.y, rnd(-20, 20) * U, rnd(-10, 30) * U, 0.5, 1.6 * U, [255, 226, 130], 40); });
@@ -1959,9 +1979,9 @@
   const isMilestone = (n) => [100, 1000, 10000, 100000].includes(n) || (n >= 111 && /^(\d)\1+$/.test(String(n)));
   function milestone(n) {
     elCount.classList.remove('pop'); void elCount.offsetWidth; elCount.classList.add('pop');
-    const busy = fx.fwBusy; launchFireworks(3, false); fx.fwBusy = busy; // お祝いの花火は、レアの花火の抽選を邪魔しない
+    feel.fireworks(3); feel.bright(0.25);
     setTimeout(() => toast('', `くべた薪 ${n.toLocaleString('ja-JP')}本`, TITLES.some((t) => t[0] === n) ? `称号「${titleOf(n)}」` : 'ゾロ目の一本', 3800), 60);
-    Sound.chime(3); haptic([30, 40, 30]);
+    feel.chime(3); haptic([30, 40, 30]);
   }
   HOOKS.thrown.push(() => { if (!wfx.preview && isMilestone(S.totalLogs)) milestone(S.totalLogs); });
   FX.milestone = () => milestone(777);
@@ -2238,6 +2258,13 @@
   });
   FX.a2hs = () => showNote('記録について', ['ホーム画面に追加すると、記録が消えにくくなります。', '設定から書き出しもできます。'], { ms: 16000 });
 
+  // ================= 演出のつよさ（設定） =================
+  def('calm', () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches), true); // 「視差効果を減らす」の端末だけ、初期値を しずか に
+  CHECK_SET.calm = V.bool;
+  SET_TOP.push(({ row, seg }) => row('演出', seg(calm(), [[true, 'しずか'], [false, 'にぎやか']], (v) => { S.set.calm = v; if (v) setStatus('fever', fever.t > 0 ? '業火' : ''); else setStatus('fever', ''); save(); })));
+  FX['calm-on'] = () => { S.set.calm = true; };
+  FX['calm-off'] = () => { S.set.calm = false; setStatus('fever', ''); };
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2280,7 +2307,7 @@
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
     window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, pick: pickRare,
       skip: (min) => { const sec = min * 60, f0 = S.fuel; clockSkew += sec * 1000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
-      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
+      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
 })();
