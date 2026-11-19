@@ -1483,8 +1483,8 @@
   ];
   for (const v of VISITORS) {
     addRare({ ...v, on: 'amb', kind: 'visit', minFuel: 20, pf: bigFire });
-    TRIG[v.id] = () => {
-      fx.visitor = { kind: v.id, age: 0, stay: v.id === 'shika' ? 14 : rnd(22, 34) };
+    TRIG[v.id] = (record) => {
+      fx.visitor = { kind: v.id, age: 0, stay: v.id === 'shika' ? 14 : rnd(22, 34), real: !!record, lv: 0 };
       if (v.id === 'fukurou') { Sound.tone(340, 300, 0.4, 0.07, 0.6, 'triangle'); Sound.tone(330, 290, 0.5, 0.07, 1.2, 'triangle'); }
       else Sound.tone(520, 620, 0.25, 0.05);
     };
@@ -1504,6 +1504,7 @@
     const v = fx.visitor;
     if (!v || (v.kind === 'shika') !== deerPass) return;
     const k = clamp(v.age / 2.6, 0, 1) * clamp((v.stay + 3 - v.age) / 2.6, 0, 1), e = k * k * (3 - 2 * k);
+    const ge = v.lv >= 4 ? clamp((v.age - v.stay * 0.35) / 1.5, 0, 1) * clamp((v.stay * 0.75 - v.age) / 1.5, 0, 1) : 0; // いちばんなかよくなると増えるしぐさ
     const dark = 0.34 * (1 - day), sh = (c) => rgb(mix(c, [16, 14, 30], dark));
     const blink = Math.sin(T * 1.3 + 2) > 0.985 ? 0.15 : 1;
     g.save();
@@ -1513,6 +1514,7 @@
       blob([210, 225, 255], W * 0.25, horizon - 6 * U, 62 * U, 0.3 * e);
       g.globalCompositeOperation = 'source-over'; g.globalAlpha = e;
       g.translate(W * 0.25, horizon + 22 * U); g.scale(U * 0.95, U * 0.95);
+      g.translate(20, 0); g.rotate(0.16 * ge); g.translate(-20, 0); // 一礼する
       g.fillStyle = sh([246, 247, 252]);
       for (const lx of [-13, -8, 9, 14]) g.fillRect(lx, -22, 2.6, 22);
       E(0, -27, 19, 9); // 胴
@@ -1527,11 +1529,13 @@
       g.restore(); return;
     }
     const owl = v.kind === 'fukurou';
-    if (owl) g.translate(cx + 128 * U, baseY + 4 * U); else g.translate(cx + (120 + (1 - e) * 46) * U, baseY + 36 * U);
+    if (owl) g.translate(cx + 128 * U, baseY + 4 * U); else g.translate(cx + (120 - (v.close ? 14 : 0) + (1 - e) * 46) * U, baseY + 36 * U);
     g.scale(U * 1.25, U * 1.25);
+    if (v.kind === 'kitsune') g.scale(1 + 0.14 * ge, 1 - 0.3 * ge);                  // 寝ころぶ
+    else if (v.kind === 'neko') g.scale(1 + 0.025 * ge * Math.sin(T * 26), 1);      // のどを鳴らす
     if (owl) { // 切り株ごと現れて、上から舞い降りる
       g.fillStyle = sh([70, 50, 34]); g.fillRect(-9, -2, 18, 20); g.fillStyle = sh([150, 118, 80]); E(0, -2, 9, 3.4);
-      g.translate(0, -(1 - e) * 70);
+      g.translate(0, -(1 - e) * 70); g.rotate(0.24 * ge * Math.sin(T * 1.3)); // 首をかしげる
       g.fillStyle = sh([122, 92, 58]); E(0, -15, 10.5, 13.5);
       tri(-9, -25, -7, -32, -3, -26); tri(9, -25, 7, -32, 3, -26);
       g.fillStyle = sh([208, 184, 140]); E(0, -18, 8.4, 7.4); E(0, -8, 5.6, 6);
@@ -1722,6 +1726,7 @@
     const when = Date.now() - sec * 500;
     for (const v of came) recordRare(v.id, when, true);
     if (came.length) lines.push(`${came.map((v) => v.name).join('と')}が、火にあたっていったようです。`);
+    for (const v of came) { const gift = giftLeave(v, true); if (gift) lines.push(`${v.name}が、${gift}を置いていったようです。`); }
     for (const fn of AWAY_LINES) { const l = fn(); if (l) lines.push(l); }
     addLogText('留守のあいだに：' + lines.join(''));
     save();
@@ -2622,6 +2627,66 @@
   }
   for (const s of STACKS) FX['stack-' + s.id] = () => stackSet(s.id, true);
 
+  // ================= 訪問者となかよく（おみやげ） =================
+  // 会った回数でなかよし度が4段階に上がる。来る確率は変えない
+  const FRIEND = { 1: [3, 7, 15, 30], 2: [2, 4, 8, 15], 3: [1, 2, 3, 5] }; // ★ごとのしきい値（回）
+  const GIFTS = {
+    kitsune:  [['donguri', 'どんぐり'], ['ha', '色づいた葉'], ['suzu', '古い鈴']],
+    neko:     [['hane', '鳥の羽根'], ['matatabi', 'またたびの実'], ['koishi', 'きれいな小石']],
+    fukurou:  [['kazakiri', '風切り羽'], ['kurumi', 'くるみ'], ['tsukiishi', '月色の石']],
+    tabibito: [['hagaki', '絵はがき'], ['coin', '古いコイン'], ['chizu', '手書きの地図']],
+    shika:    [['ke', '白い毛'], ['kessho', '雪の結晶'], ['tsuno', '角のかけら']],
+  };
+  const WORDS = ['いい火ですね。', '薪のはぜる音は、どこで聞いても同じだ。', '山の向こうは、もう雪でした。', '火を見ていると、急ぐ理由を忘れますね。', 'この先の峠で、きれいな星を見ました。', '湯をわかすには、熾がいちばんです。',
+    'また寄らせてください。', '昔、ここと似た火を囲んだことがあります。', '道に迷っても、煙は見えるものです。', 'おかげで、手があたたまりました。'];
+  def('gifts', () => ({}));
+  const giftIds = () => Object.keys(GIFTS).flatMap((v) => GIFTS[v].map(([id]) => v + '-' + id));
+  CHECK.gifts = V.rec(giftIds, V.time);
+  const friendLv = (v) => { const n = S.col[v.id] ? S.col[v.id].n : 0; return FRIEND[v.star].filter((t) => n >= t).length; };
+  // 2〜4段目で、おみやげを1つずつ。すでに回数に達しているぶんも、1回の訪問につき1つ
+  function giftLeave(v, quiet) {
+    const list = GIFTS[v.id], has = list.filter(([id]) => S.gifts[v.id + '-' + id]).length;
+    if (has >= Math.min(3, friendLv(v) - 1)) return null;
+    const [id, name] = list[has];
+    S.gifts[v.id + '-' + id] = Date.now(); S.unseen = true; save(); syncButtons();
+    if (!quiet) { toast('', `${v.name}が、${name}を置いていった`, '図鑑の「おみやげ」に記録', 4400); Sound.tone(784, 1047, 0.3, 0.06); }
+    return name;
+  }
+  HOOKS.update.push((dt) => {
+    const v = fx.visitor;
+    if (!v) return;
+    const r = RMAP[v.kind];
+    if (!v.setup) { // 1段目から: 火の少し近くに座り、いる時間が3割のびる
+      v.setup = true; v.lv = v.real ? friendLv(r) : v.lv;
+      if (v.lv >= 1) { v.close = true; v.stay *= 1.3; }
+    }
+    if (v.lv >= 4 && v.kind === 'tabibito' && !v.said && v.age > 7) { // 旅人は、ひとこと残す
+      v.said = true;
+      const w = pick(WORDS);
+      toast('', '旅人', `「${w}」`, 5000);
+      if (v.real) addLogText(`旅人のひとこと：「${w}」`);
+    }
+    if (v.lv >= 4 && v.kind === 'neko' && v.age > v.stay * 0.35 && v.age < v.stay * 0.75 && Math.random() < dt * 5) Sound.tone(58, 52, 0.16, 0.05, 0, 'triangle');
+    if (v.real && !v.gave && v.age > v.stay) { v.gave = true; giftLeave(r, false); } // 帰りぎわに
+  });
+  BOOK_PAGES.push({ id: 'gift', label: 'おみやげ', show: () => VISITORS.some((v) => S.col[v.id]), render: (pane) => {
+    const box = el('div', 'stacks'); box.appendChild(el('h2', '', 'なかよし'));
+    for (const v of VISITORS) {
+      const n = S.col[v.id] ? S.col[v.id].n : 0;
+      if (!n) continue;
+      const lv = friendLv(v), next = FRIEND[v.star][lv], r = el('div', 'stackrow');
+      r.append(el('b', '', `${v.name}　${'●'.repeat(lv)}${'○'.repeat(4 - lv)}`), el('small', '', `会った回数 ${n}回` + (next ? `　／　あと${next - n}回で、もっとなかよく` : '　／　いちばんのなかよし')));
+      box.appendChild(r);
+    }
+    pane.appendChild(box);
+    cardPage(pane, 'gift', 'おみやげ', VISITORS.flatMap((v) => GIFTS[v.id].map(([id, name]) => ({
+      id: v.id + '-' + id, name, glyph: v.glyph, css: orbCss(v), rec: S.gifts[v.id + '-' + id] ? { n: 1, first: S.gifts[v.id + '-' + id] } : undefined,
+      desc: `${v.name}が、帰りぎわに置いていった。`, hint: `${v.name}と、もっとなかよくなると…。`,
+    }))), 'つ');
+  } });
+  for (const v of VISITORS) FX['friend-' + v.id] = () => { trigger(v.id, false); Object.assign(fx.visitor, { lv: 4, setup: true, close: true }); }; // いちばんなかよくなったときのしぐさ
+  FX.gift = () => toast('', 'キツネが、どんぐりを置いていった', 'プレビュー（記録されません）', 3600);
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2662,9 +2727,9 @@
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, pick: pickRare,
+    window.takibi = { fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, endVisit: () => { if (fx.visitor) fx.visitor.age = Math.max(fx.visitor.age, fx.visitor.stay + 0.01); }, pick: pickRare,
       skip: (min) => { const sec = clamp(min * 60, 0, 30 * 86400), f0 = S.fuel; clockSkew += min * 60000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
-      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
+      counts: () => ({ fps: Math.round(perf.fps), quality: Q(), visitor: fx.visitor ? fx.visitor.kind : null, wake: wake.lock ? 'held' : wake.want ? 'wanted' : 'off', watching: watching(), steward: fx.steward, ambGap: fx.ambGap, shake: fx.shake, slow: fx.slowT, bright: fx.bright, hold: fx.hold, omen: !!fx.omen, rockets: rockets.length, flames: flames.length, sparks: sparks.length, smokes: smokes.length, fireworks: fw.length, weather: wps.length, hazes: hazes.length, flies: flies.length, flying: flying.length }) };
   }
   requestAnimationFrame(frame);
 })();
