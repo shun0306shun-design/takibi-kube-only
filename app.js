@@ -1743,6 +1743,40 @@
     pane.appendChild(el('p', 'note', '下の「音」ボタンが OFF のあいだは、どの音も鳴りません。'));
   });
 
+  // ================= 写真モード =================
+  // UI をすべて隠す。もう一度タップすると、その瞬間の景色に本数と日付を小さく入れた画像を作って戻る
+  const photo = { on: false, url: null };
+  function photoEnter() {
+    photo.on = true; endFeed(); closeNote(); app.classList.add('photo');
+    toast('', '写真モード', '画面をタップすると撮って戻ります', 2200);
+  }
+  function photoShoot() {
+    photo.on = false; app.classList.remove('photo');
+    const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
+    const x = c.getContext('2d'), k = c.width / W, d = new Date(), pad = (n) => String(n).padStart(2, '0');
+    x.drawImage(cv, 0, 0);
+    const font = (px) => `${px * k}px "Hiragino Mincho ProN", "Yu Mincho", YuMincho, "Noto Serif JP", serif`;
+    x.textBaseline = 'alphabetic'; x.shadowColor = 'rgba(0,0,0,.75)'; x.shadowBlur = 6 * k; x.fillStyle = 'rgba(255,244,224,.92)';
+    x.textAlign = 'right';
+    x.font = font(13); x.fillText(`くべた薪 ${S.totalLogs.toLocaleString('ja-JP')}本`, c.width - 14 * k, c.height - 30 * k);
+    x.font = font(10.5); x.fillText(`${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`, c.width - 14 * k, c.height - 14 * k);
+    x.textAlign = 'left'; x.fillStyle = 'rgba(255,244,224,.6)'; x.fillText('焚き火くべ', 14 * k, c.height - 14 * k);
+    const name = `takibi-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.png`;
+    c.toBlob((blob) => {
+      if (!blob) { toast('', '画像を作れませんでした', '', 2400); return; }
+      if (photo.url) URL.revokeObjectURL(photo.url);
+      photo.url = URL.createObjectURL(blob);
+      showNote('写真', ['この景色を残しますか？'], { img: photo.url, buttons: [['保存・共有', () => {
+        const file = typeof File === 'function' ? new File([blob], name, { type: 'image/png' }) : null;
+        if (file && navigator.canShare && navigator.canShare({ files: [file] })) { navigator.share({ files: [file], title: '焚き火くべ' }).catch(() => {}); return; }
+        const a = document.createElement('a'); a.href = photo.url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); // 共有できない環境ではダウンロード
+      }]] });
+    }, 'image/png');
+  }
+  TAP_GUARD.unshift(() => { if (!photo.on) return false; photoShoot(); return true; });
+  addChip('chipPhoto', '写真', photoEnter);
+  FX.photo = photoEnter;
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(now) {

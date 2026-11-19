@@ -231,6 +231,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .mixctl input[type=range] { width: 108px; height: 34px; margin: 0; touch-action: none; accent-color: #ffb45e; }
 #app.asleep #hud, #app.asleep #bar, #app.asleep #chips { opacity: .3; transition: opacity 2s; }
 
+#app.photo #hud, #app.photo #hint, #app.photo #bar, #app.photo #chips, #app.photo::before { opacity: 0; pointer-events: none; transition: opacity .5s; }
+#app.photo #bar button { pointer-events: none; }
+#app.photo #hint { animation: none; }
+
 /* ---- 横向きは非対応 ---- */
 #rotate {
   display: none; position: absolute; z-index: 9; top: 0; right: 0; bottom: 0; left: 0; place-items: center;
