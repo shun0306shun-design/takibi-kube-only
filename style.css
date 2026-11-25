@@ -222,7 +222,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #note .btns button:first-child:not(:last-child) { background: rgba(255, 150, 60, .2); border-color: rgba(255, 176, 96, .65); color: #ffe3bd; }
 
 .seg.pages { margin: 4px 0 8px; }
-.seg.pages button { flex: 1; }
+.seg.pages button { flex: 1; min-width: 0; padding: 0 2px; font-size: 12.5px; white-space: nowrap; }
 .row > span:first-child { padding-right: 10px; min-width: 0; flex: 1 1 auto; line-height: 1.5; }
 .row > .tog, .row > .seg, .row > .mini, .row > .mixctl, .row > .val { flex: none; }
 .row.stack > span:first-child { flex: none; }
@@ -345,6 +345,37 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .shiori b { font-weight: 500; font-size: 14px; letter-spacing: .08em; }
 .shiori span { font-size: 11.5px; color: var(--dim); }
 .shiori:not(.done) b { color: var(--dim); }
+
+/* ---- 部屋（囲む火） ---- */
+#room {
+  position: absolute; z-index: 6; left: 14px; right: 14px; bottom: calc(var(--safe-b) + 20px); max-height: 82%; overflow-y: auto; touch-action: pan-y;
+  padding: 16px 16px 12px; border-radius: 18px; background: rgba(20, 14, 10, .96); border: 1px solid rgba(255, 214, 140, .45);
+  box-shadow: 0 8px 36px rgba(0, 0, 0, .6); font-size: 13px; line-height: 1.8; display: none;
+}
+#app.rooming #room { display: block; }
+#room b { display: block; font-weight: 500; font-size: 16px; letter-spacing: .2em; color: #ffdcae; margin-bottom: 6px; }
+#room p { margin: 0 0 8px; }
+#room p.cap { font-size: 11px; color: var(--dim); margin: 2px 0 4px; }
+#room p.msg { color: #ffb3a4; }
+#room p.pass { font-size: 18px; letter-spacing: .12em; -webkit-user-select: text; user-select: text; word-break: break-all; }
+#room input {
+  width: 100%; height: 48px; padding: 0 12px; margin: 2px 0 8px; border-radius: 12px; border: 1px solid var(--line); background: rgba(0, 0, 0, .35); color: var(--ink);
+  font: inherit; font-size: 18px; letter-spacing: .1em; -webkit-user-select: text; user-select: text;
+}
+#room .btns { display: flex; gap: 8px; margin: 8px 0 0; }
+#room button { flex: 1; min-height: 44px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--line); background: transparent; font-size: 13px; letter-spacing: .06em; }
+#room > button { width: 100%; margin-top: 8px; }
+#room button.main { background: rgba(255, 150, 60, .22); border-color: rgba(255, 176, 96, .65); color: #ffe3bd; }
+#room button.warn { border-color: rgba(255, 120, 100, .45); color: #ffb3a4; }
+#room .marks { display: flex; gap: 8px; margin: 2px 0 6px; }
+#room .marks button { flex: none; width: 30px; min-height: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(0, 0, 0, .4); padding: 0; }
+#room .marks button.on { border-color: #fff; box-shadow: 0 0 10px rgba(255, 255, 255, .6); }
+#roomDots { margin-top: 4px; display: flex; justify-content: center; gap: 7px; min-height: 0; }
+#roomDots:empty { display: none; }
+#roomDots i { width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 6px currentColor; opacity: .9; }
+#roomDots i.me { outline: 1px solid rgba(255, 255, 255, .7); outline-offset: 1.5px; }
+#app.photo #roomDots, #app.photo #room { display: none; }
+#app.slim.inroom #chips:not(.menu) { display: flex; } /* すっきり表示でも、部屋の中では「しぐさ」「部屋を出る」を出す */
 
 /* ---- 横向きは非対応 ---- */
 #rotate {

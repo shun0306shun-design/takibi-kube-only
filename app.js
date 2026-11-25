@@ -111,7 +111,10 @@
   let noSave = false, saveFailTold = false;
   function save() {
     if (noSave) return; // 読み込み直前など、いまの状態で上書きしてはいけないとき
-    try { S.lastSeen = Date.now(); localStorage.setItem(KEY, JSON.stringify(S)); dirty = false; } catch (e) {
+    const shown = S.fuel;
+    if (fx.room) S.fuel = fx.room.soloFuel; // 部屋の中では、ひとりの焚き火の火力をそのまま残す（部屋の火は保存しない）
+    try { S.lastSeen = Date.now(); localStorage.setItem(KEY, JSON.stringify(S)); dirty = false; S.fuel = shown; } catch (e) {
+      S.fuel = shown;
       if (saveFailTold) return; // 保存できなくても遊べる。最初の1回だけ知らせる
       saveFailTold = true;
       setTimeout(() => showNote('記録について', ['この端末では、いま記録を保存できません（プライベートブラウズなど）。', '遊ぶことはできます。'], { ms: 14000 }), 900);
@@ -440,7 +443,7 @@
   const rockets = [], fw = [], shoots = [];
   const fx = { flame: null, flameT: 0, fwBusy: 0, meteorT: 0, rain: null, spirit: null, flash: 0, flashX: 0, flashY: 0, flashC: GOLD,
     slowT: 0, shake: 0, bright: 0, freeze: false, base: 'fire', hold: false, omen: null,
-    ambGap: 10, steward: false, uncounted: false, moonP: 0.1, starBase: 0, starDark: false, fw: 1, fh: 1, sparkMul: 1, roastMul: 1, slots: null };
+    ambGap: 10, steward: false, uncounted: false, moonP: 0.1, starBase: 0, starDark: false, fw: 1, fh: 1, sparkMul: 1, roastMul: 1, slots: null, room: null, wide: 1 };
   let flameAcc = 0, sparkAcc = 0, smokeAcc = 0, ambT = 0, lastThrow = 0, lastRoll = 0, crackT = 0;
 
   const palName = () => { // レアの色炎 ＞ ふだんの色（業火タイムの金、または自分で選んだ色）
@@ -451,7 +454,7 @@
   // 薪による一時的な色味。レアの色炎があるときはそちらを優先し、ふだんの炎にだけ混ぜる
   const flamePal = () => { const n = palName(); return n === 'fire' && fx.tintT > 0 && Math.random() < 0.62 ? fx.tint : n; };
   function spawnFlame() {
-    const spread = (10 + 34 * I) * U * fx.fw;
+    const spread = (10 + 34 * I) * U * fx.fw * fx.wide;
     const off = (Math.random() + Math.random() + Math.random() - 1.5) * spread;
     const center = 1 - Math.min(1, Math.abs(off) / (spread * 1.3));
     flames.push({
@@ -488,7 +491,17 @@
     fx.uncounted = false;
     hideHint(); if (!stew) haptic(8, true);
   }
+  function throwGhost(x0, y0, glow) { // 部屋のほかの人がくべた薪（見た目だけ。本数にも抽選にも数えない）
+    if (flying.length >= 18) return;
+    flying.push({ x0, y0, x1: cx + rnd(-16, 16) * U, y1: baseY - rnd(0, 14) * U, t: 0, dur: rnd(0.55, 0.72), rot: rnd(-0.6, 0.6), spin: (Math.random() < 0.5 ? -1 : 1) * rnd(3, 7),
+      arc: rnd(60, 110) * U, x: 0, y: 0, fuel: 0, flare: 0.04, sparks: 0.6, len: 54, col: null, ghost: true, glow });
+  }
   function landLog(L) {
+    if (L.ghost) {
+      flare = Math.min(0.9, flare + L.flare); emberBurst(L.x1, L.y1 - 8 * U, 6, 0.6);
+      landed.push({ x: L.x1, y: L.y1, rot: L.rot, a: 1, len: L.len, col: L.col }); Sound.crackle(1.1);
+      return;
+    }
     L.from = S.fuel;
     S.fuel = Math.min(100, S.fuel + L.fuel);
     flare = Math.min(0.9, flare + L.flare);
@@ -528,7 +541,14 @@
   }
   // 予兆は「もう決まった結果」を先に見せるだけ。抽選そのものには関わらない
   let omenFn = null;
-  function rollRare(on) { const id = pickRare(on); if (omenFn && omenFn(id)) return; if (id) trigger(id, true); }
+  let rollGate = null, rollTake = null; // 部屋の中: だれの端末が抽選するか／結果を部屋に送るか を multi.js が決める
+  function rollRare(on) {
+    if (rollGate && !rollGate(on)) return;
+    const id = pickRare(on);
+    if (id && rollTake && rollTake(id, on)) return;
+    if (omenFn && omenFn(id)) return;
+    if (id) trigger(id, true);
+  }
   function recordRare(id, when, quiet) {
     const now = when || Date.now();
     const c = S.col[id] || (S.col[id] = { n: 0, first: now });
@@ -539,7 +559,7 @@
     return c;
   }
   function addLogText(txt, when) { S.log.unshift({ t: when || Date.now(), txt }); if (S.log.length > 100) S.log.length = 100; dirty = true; }
-  function trigger(id, record) {
+  function trigger(id, record, note) {
     const r = RMAP[id];
     if (!r) return;
     if (r.kind === 'hidden') { TRIG[id](record); return; } // 隠し要素は記録も演出も自前で行う
@@ -560,7 +580,7 @@
 
     let sub = 'プレビュー（記録されません）';
     if (record) { const c = recordRare(id); sub = c.n === 1 ? 'はじめて出会った！ 図鑑に記録' : `${c.n}回目`; }
-    announce(r, sub);
+    announce(r, note && record ? `${sub}　・　${note}` : sub);
   }
   function announce(r, sub, cls) {
     toast(starStr(r), r.name, sub, 5200, cls);
@@ -978,7 +998,7 @@
     run('front', day);
     g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
 
-    for (const L of flying) { const k = L.t / L.dur, sc = 1.25 - 0.35 * k; drawLog(L.x, L.y, L.rot, L.len * U * sc, (L.th || 13) * U * sc, 1, 1, 0, L.col); }
+    for (const L of flying) { const k = L.t / L.dur, sc = 1.25 - 0.35 * k; drawLog(L.x, L.y, L.rot, L.len * U * sc, (L.th || 13) * U * sc, 1, 1, 0, L.col); if (L.glow) { g.globalCompositeOperation = 'lighter'; blob(L.glow, L.x, L.y, 11 * U, 0.55); g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; } }
 
     // --- 花火 ---
     g.globalCompositeOperation = 'lighter';
@@ -1394,7 +1414,7 @@
     S.woodSel = order[(order.indexOf(S.woodSel) + 1) % order.length];
     save();
   }
-  addChip('chipWood', woodLabel, woodCycle, () => opened('wood'));
+  addChip('chipWood', woodLabel, woodCycle, () => opened('wood') && !fx.room);
   BOOK_PAGES.push({ id: 'wood', label: '薪', show: () => opened('wood'), render: (pane) => cardPage(pane, 'wood', '薪', WOODS.map((w) => ({
     id: w.id, name: w.name, glyph: w.glyph, css: orbOf(w.col), rec: S.wood[w.id], desc: w.desc, hint: 'まだくべたことのない薪。',
   })), '本') });
@@ -1417,18 +1437,20 @@
     toast('', `${ROASTS[item].name}をあぶる`, 'いい色になったら、画面をタップ', 2800);
     syncChips();
   }
+  function roastRecord(item, res, gift) { // gift = 部屋でもらったもの（図鑑では「もらった○○」）
+    const key = (gift ? 'gift-' : '') + item + '-' + res;
+    const rec = S.roast[key] || (S.roast[key] = { n: 0, first: Date.now() });
+    rec.n++; if (rec.n === 1) { S.unseen = true; syncButtons(); }
+    save();
+    return rec.n === 1 ? 'はじめて！ 図鑑の「あぶり」に記録' : `${rec.n}回目`;
+  }
+  let roastShare = null;
   function roastPull() {
     if (roast.done) return;
     const it = ROASTS[roast.item], res = roastResult(it, roast.p);
     roast.res = res; roast.done = 0.001;
     let sub = 'プレビュー（記録されません）';
-    if (!roast.preview) {
-      const key = roast.item + '-' + res;
-      const rec = S.roast[key] || (S.roast[key] = { n: 0, first: Date.now() });
-      rec.n++; if (rec.n === 1) { S.unseen = true; syncButtons(); }
-      sub = rec.n === 1 ? 'はじめて！ 図鑑の「あぶり」に記録' : `${rec.n}回目`;
-      save();
-    }
+    if (!roast.preview) sub = roastShare && roastShare(roast.item, res) ? '自分で食べるか、おすそわけするか' : roastRecord(roast.item, res); // 部屋の中では、渡すこともできる
     toast('', RESULTS[res][0] + it.name, sub, 3600);
     if (res === 'perfect') { Sound.chime(2); haptic([20, 40, 20]); emberBurst(cx, baseY - 30 * U, 10, 0.8); }
     else if (res === 'burnt') Sound.tone(180, 70, 0.3, 0.2);
@@ -1606,7 +1628,7 @@
   const wxs = { rain: 0, snow: 0, fog: 0, ground: -1, afterRain: 0, force: null, season: null, check: 0, acc: 0, layers: {} };
   const wps = [], flies = [];
   const seasonNow = () => wxs.season || ['winter', 'winter', 'spring', 'spring', 'spring', 'summer', 'summer', 'summer', 'autumn', 'autumn', 'autumn', 'winter'][new Date().getMonth()];
-  const wxKind = () => wxs.force || (S.set.wx !== 'auto' ? S.set.wx : S.weather.kind);
+  const wxKind = () => wxs.force || wxs.room || (S.set.wx !== 'auto' ? S.set.wx : S.weather.kind); // room = 部屋の全員で同じ天気
   function nextWeather() {
     const se = seasonNow();
     const w = { clear: 60, fog: 12, rain: { spring: 16, summer: 20, autumn: 16, winter: 4 }[se], snow: se === 'winter' ? 26 : 0 };
@@ -1735,7 +1757,7 @@
   // ================= 留守のあいだに・今日の一本・称号 =================
   // 戻ってきたとき、離れていた間の火の様子と、その間に来た訪問者を短く伝える
   function awayReport(sec, f0) {
-    if (sec < 180 || S.totalLogs === 0 || hid.quietBoot) return;
+    if (sec < 180 || S.totalLogs === 0 || hid.quietBoot || fx.room) return;
     const k = BURN_A / BURN_B;
     const burnT = burnTimeAway(sec, f0);
     const lines = [];
@@ -1894,7 +1916,7 @@
     x.textAlign = 'right';
     x.font = font(13); x.fillText(`くべた薪 ${S.totalLogs.toLocaleString('ja-JP')}本`, c.width - 14 * k, c.height - 30 * k);
     x.font = font(10.5); x.fillText(`${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}${dayTarget ? '' : '　' + moonName()}`, c.width - 14 * k, c.height - 14 * k);
-    x.textAlign = 'left'; x.fillStyle = 'rgba(255,244,224,.6)'; x.fillText('焚き火くべ', 14 * k, c.height - 14 * k);
+    x.textAlign = 'left'; x.fillStyle = 'rgba(255,244,224,.6)'; x.fillText('焚き火くべ' + (photoNote ? '　' + photoNote() : ''), 14 * k, c.height - 14 * k);
     const name = `takibi-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.png`;
     c.toBlob((blob) => {
       if (!blob) { toast('', '画像を作れませんでした', '', 2400); return; }
@@ -1977,7 +1999,7 @@
       if (!calm() && Math.random() < dt * 9) Sound.crackle(1.5);                                                           // 音もにぎやかに
       if (!calm() && Math.random() < dt * 1.6) { const f = pick([1047, 1319, 1568, 2093]); Sound.tone(f, f, 0.4, 0.03); }
       if (fever.t <= 0) feverEnd();
-    } else if (!fx.freeze) {
+    } else if (!fx.freeze && !fx.room) { // 部屋の中では、ゲージは部屋で1つ（multi.js が動かす）
       fever.gauge = S.fuel >= 90 ? Math.min(1, fever.gauge + dt / 40) : Math.max(0, fever.gauge - dt / 90);
       if (fever.gauge >= 1) feverStart();
     }
@@ -2084,7 +2106,7 @@
   def('pendingContinue', () => 0);
   def('pendingGameOver', () => 0);
   const hid = { busy: false, preview: false, taps: 0, timers: [], quietBoot: false, mode: '' };
-  const hiddenOk = () => !hid.busy && !fx.steward && !S.pendingContinue && !S.pendingGameOver && S.lastHidden !== dayKey(Date.now());
+  const hiddenOk = () => !hid.busy && !fx.steward && !fx.room && !S.pendingContinue && !S.pendingGameOver && S.lastHidden !== dayKey(Date.now());
   addRare({ id: 'continue', name: 'コンティニュー？', star: 3.5, stars: '★★★☆', glyph: '続', orb: ['#eeeef6', '#5c5c7c', '#0c0c18'], on: 'both', kind: 'hidden', p: 1 / 8192, ok: hiddenOk,
     desc: '続けますか、と聞かれた。答えなくても、火はまた灯った。……答えられないときも、あるのだろうか。', hint: 'まだ、だれも知らない。' });
   addRare({ id: 'gameover', name: '消えた焚き火', star: 4, stars: '★★★★', glyph: '消', orb: ['#ffffff', '#34343e', '#000000'], on: 'both', kind: 'hidden', p: 1 / 16384, ok: hiddenOk,
@@ -2226,7 +2248,7 @@
     sound: V.bool, vib: V.bool, sky: V.oneOf(['auto', 'night', 'day']), wx: V.oneOf(['auto'].concat(Object.keys(WX_NAME))),
     mix: V.obj(Object.fromEntries(MIX.map(([id]) => [id, V.obj({ on: V.bool, vol: V.num(0, 1) })]))),
   };
-  const roastKeys = () => Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((r) => id + '-' + r)).concat(Object.keys(BURY).flatMap((id) => Object.keys(BRES).map((r) => id + '-' + r)));
+  const roastKeys = () => Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((r) => id + '-' + r)).concat(Object.keys(BURY).flatMap((id) => Object.keys(BRES).map((r) => id + '-' + r))).concat(Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((r) => 'gift-' + id + '-' + r)));
   function sanitize(src) {
     const out = fresh();
     for (const k of Object.keys(CHECK)) { const c = CHECK[k](src[k]); if (c !== undefined) out[k] = c; }
@@ -2251,6 +2273,7 @@
   function exportText() { // その場かぎりの状態と、隠し要素の保留の印は含めない（sanitize が知っているキーだけを写すので自然に落ちる）
     const o = sanitize(S);
     delete o.pendingContinue; delete o.pendingGameOver;
+    if (o.room) o.room.last = ''; // 部屋の合言葉は、書き出しに含めない
     o.lastSeen = Date.now(); o.exportedAt = Date.now();
     return PREFIX + b64.enc(JSON.stringify(o));
   }
@@ -2413,7 +2436,7 @@
     openChipMenu([[15, 30, 60].map((m) => [`${m}分`, () => watchStart(m), 'chipW' + m]), [['やめる', () => {}]]].flat());
     if (S.set.wake && (!navigator.wakeLock || wake.failed)) toast('', 'ながめる', 'この端末では、画面が自動で消えることがあります', 3600);
   }
-  addChip('chipWatch', 'ながめる', watchMenu, () => opened('watch'));
+  addChip('chipWatch', 'ながめる', watchMenu, () => opened('watch') && !fx.room);
   SET_ROWS.push(({ row, tog }) => row('ながめる・寝落ちの間は画面をつけたままにする', tog(S.set.wake, (v) => { S.set.wake = v; if (!v) wakeSet(false); save(); })));
   STATS.push((stat) => stat('おまかせでくべた薪', `${S.watchLogs.toLocaleString('ja-JP')}本`));
   FX.watch = () => watchStart(15);
@@ -2479,7 +2502,7 @@
   HOWTO.push(['photo', '写真：UIを隠します。もう一度タップで、その景色を画像に残せます。']);
   SET_END.push(({ pane }) => {
     const d = el('details', 'howto'); d.appendChild(el('summary', '', 'あそびかた'));
-    for (const [k, text] of HOWTO) if (!k || opened(k)) d.appendChild(el('p', '', text));
+    for (const [k, text] of HOWTO) if (!k || (typeof k === 'function' ? k() : opened(k))) d.appendChild(el('p', '', text));
     pane.appendChild(d);
   });
   // アップデート後の最初の起動で1回だけ（はじめての人には出さない）
@@ -2519,7 +2542,7 @@
   const buryResult = (r) => (r < 0.7 ? 'hard' : r < 1 ? 'hoku' : r <= 1.6 ? 'best' : 'sumi'); // 最高の幅を広く取る（時計を見張らなくてよい）
   const buryReady = () => { const r = buryRatio(); return !!S.bury && r >= 1 && r <= 1.6; };
   HOOKS.update.push((dt) => {
-    if (fx.freeze) return; // 隠し要素の演出中は増減させない
+    if (fx.freeze || fx.room) return; // 隠し要素の演出中と、部屋の中では増減させない（ひとりの焚き火のもの）
     const f = S.fuel;
     if (f >= 20) S.ember = Math.min(100, S.ember + dt * EMBER_UP * (f >= 40 && f < 90 ? 1 : 0.5) * fx.emberMul); // 強すぎる火は灰にしてしまう
     else if (f < 5) S.ember = Math.max(0, S.ember - dt * EMBER_DOWN);
@@ -2527,6 +2550,7 @@
   });
   // 離れていた間: 熾は増えない。火が熾火になってからのぶんだけ減らす。うめたものは、その間の熾で進む（くり返しは最大300回）
   function emberAway(sec, f0) {
+    if (fx.room) return;
     sec = clamp(sec, 0, 30 * 86400); // 時計がずれていても、負の時間や極端に長い時間は使わない
     const burnT = burnTimeAway(sec, f0), rest = Math.max(0, sec - burnT);
     if (S.bury) S.bury.heat += burnT * buryRate(S.ember);
@@ -2564,7 +2588,7 @@
   const elDots = $('stage').insertAdjacentElement('afterend', el('div')); elDots.id = 'emberDots';
   let dotsNow = null, hotNow = null;
   HOOKS.sec.push(() => {
-    const n = S.ember >= 10 && opened('ember') ? clamp(Math.ceil(S.ember / 20), 1, 5) : 0;
+    const n = S.ember >= 10 && opened('ember') && !fx.room ? clamp(Math.ceil(S.ember / 20), 1, 5) : 0;
     if (n !== dotsNow) { dotsNow = n; elDots.textContent = n ? '●'.repeat(n) + '○'.repeat(5 - n) : ''; }
     const hot = buryReady();
     if (hot !== hotNow) { hotNow = hot; chipRoast.classList.toggle('hot', hot); } // 食べごろに入ると、あぶるチップがほんのり光る
@@ -2585,6 +2609,7 @@
   }
   ROAST_ALSO.push(() => !!S.bury || S.ember >= 40);
   ROAST_MENU.push((items) => {
+    if (fx.room) return;
     if (S.bury) items.push(['ほりだす', buryDig, 'chipDig']);
     else if (S.ember >= 40) items.push(['うめる', () => openChipMenu(Object.keys(BURY).map((id) => [BURY[id].name, () => buryStart(id), 'chipB-' + id]).concat([['やめる', () => {}]])), 'chipBury']);
   });
@@ -2638,7 +2663,12 @@
     }
   });
   function stackCycle() { stackSet(STACKS[(STACKS.indexOf(stk.cur) + 1) % STACKS.length].id); }
-  addChip('chipStack', (short) => (short ? '' : '組み：') + stk.cur.short, stackCycle, () => opened('stack'));
+  addChip('chipStack', (short) => (short ? '' : '組み：') + stk.cur.short, stackCycle, () => opened('stack') && !fx.room);
+  function stackRoom(on) { // 部屋の中は、ふだんの合掌型（記録にも数えない）。出たら元の組み方に戻す
+    const want = on ? STACKS[0] : (STMAP[S.stack] || STACKS[0]);
+    if (want !== stk.cur) { stk.from = { w: fx.fw, h: fx.fh, slots: fx.slots || SLOTS }; stk.cur = want; stk.t = 0; }
+    stk.preview = on; stackApply();
+  }
   PREP.splice(1, 0, ({ row }) => { if (opened('stack')) row('組み方', mini(stk.cur.name, () => { stackCycle(); renderSet(); })); });
   HOWTO.push(['stack', '組み方：合掌型（ふだん）／井桁型（すぐ大きな火に。減りは早い）／並列型（低くゆっくり。熾がよく育つ）。チップで切り替えます。']);
   { // 図鑑「薪」のページの下に、組み方の記録
@@ -2823,7 +2853,7 @@
     if (lit5) {
       if (dayTarget) p.day = Math.min(1e6, p.day + 1); else p.night = Math.min(1e6, p.night + 1);
       p.keep = Math.min(1e6, p.keep + 1);                                           // 火を絶やさない: 火力5以上が続くこと（ながめる中も数える）
-      const autoWx = S.set.wx === 'auto' && !wxs.force;                             // 天気を固定している間は数えない
+      const autoWx = S.set.wx === 'auto' && !wxs.force && !wxs.room;                             // 天気を固定している間は数えない
       p.rain = autoWx && wxKind() === 'rain' ? p.rain + 1 : 0;
       if (autoWx) p.wx[wxKind()] = true;
       if (!wxs.season) p.se[seasonNow()] = true;
@@ -2920,6 +2950,79 @@
   FX['props-all'] = () => { sp.all = true; sp.none = false; paintProps(); };
   FX['props-none'] = () => { sp.all = false; sp.none = true; paintProps(); };
 
+  // ================= 部屋（だれかと囲む）: multi.js への小さな窓口 =================
+  // マルチの処理は multi.js にあり、部屋に入るときに初めて読み込む。ひとりで遊ぶあいだは Firebase を読み込まず、通信もしない。
+  // ここにあるのは、入口と、multi.js から呼ぶための窓口（くべる・演出を出す・状態を読む）、それと図鑑のページだけ
+  const MEV = [ // 部屋の中でしか起きない出来事（ひとりの図鑑の分母・炎の色の条件には入れない）
+    ['kasanaru',    '重なる手',       1, '手', 'ふたりの薪が、ほとんど同時に火に届いた。',               'だれかと同じ瞬間に、薪をくべると…。'],
+    ['mitsu',       '三つの火の粉',   2, '参', '三人の薪が重なって、火の粉が三すじ上がった。',           '三人が、同じ瞬間に…。'],
+    ['itsutsu',     '五つの手',       3, '伍', '五人全員の薪が、ひとつの火に同時に届いた。',             '五人そろって、同じ瞬間に…。'],
+    ['hinowa',      '火の輪',         2, '輪', '五人で囲んだ火が、ひとりでは届かない大きさになった。',   '五人そろって、火を大きく育てると…。'],
+    ['onajihoshi',  '同じ星',         2, '星', '同じ流れ星を、だれかも指さしていた。',                   '部屋で流れ星が流れたら、すぐに空をタップ。'],
+    ['katarai',     '語らいの夜',     2, '語', '三人以上で、言葉もなく、長いあいだ火を守った。',         '三人以上で、30分のあいだ火を絶やさずにいると…。'],
+    ['hisashiburi', 'ひさしぶりの火', 1, '再', 'しばらくだれも来なかった熾火に、ふたたび火が入った。',   '長くあけた部屋の熾火に、薪をくべると…。'],
+    ['sen',         '千の薪',         2, '千', 'この部屋で燃やした薪が、千本を超えた。',                 '同じ部屋で、みんなで千本…。'],
+  ];
+  def('room', () => ({ last: '', logs: 0, col: {}, mark: 0, told: false })); // last = 最後に入った部屋の合言葉（この端末の中だけ）
+  CHECK.room = (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    return { last: V.str(24)(v.last) || '', logs: V.count(v.logs) || 0, col: V.rec(() => MEV.map((m) => m[0]), V.nfirst)(v.col) || {}, mark: V.num(0, 7, true)(v.mark) || 0, told: v.told === true };
+  };
+  let roomCfg = null, roomMod = null, photoNote = null;
+  function roomMode(on) { // ひとりの焚き火の状態は、入る前のまま取っておき、出たら戻す
+    if (on && !fx.room) { if (watching()) watchStop(false); closeChipMenu(); fx.room = { soloFuel: S.fuel }; stackRoom(true); }
+    else if (!on && fx.room) {
+      S.fuel = fx.room.soloFuel; fx.room = null; fx.wide = 1; wxs.room = null; wxs.check = 0; stackRoom(false);
+      if (fever.t > 0) feverEnd();
+      fever.gauge = 0; rollGate = rollTake = roastShare = photoNote = null; setStatus('room', '');
+    }
+    app.classList.toggle('inroom', !!fx.room);
+    syncChips(); save();
+  }
+  const api = {
+    get S() { return S; }, fx, HOOKS, TAP_GUARD, FX, MEV, RARES, RMAP, DEBUG, BURN: { A: BURN_A, B: BURN_B, LOG: LOG_FUEL },
+    geo: () => ({ W, H, U, cx, baseY, horizon, T, I, lit, flameH, day: dayness, night: !dayTarget }),
+    ctx: () => g, blob, rgb, rgba, mix, clamp, lerp, rnd, pick, el, $, app, now, fmtDur,
+    toast, quietToast, showNote, closeNote, noteLater, setStatus, addLogText, save, syncButtons, closeSheet, shareOrDownload,
+    addChip, openChipMenu, closeChipMenu, syncChips, CHIP_OFF,
+    throwLog, throwGhost, emberBurst, addSpark, Sound, haptic, feel, calm, announce, trigger, roastRecord, roomMode, seasonNow,
+    fever: { start: feverStart, state: fever },
+    shooting: () => shoots.some((s) => s.delay <= 0),
+    setWeather: (k) => { wxs.room = k; wxs.check = 0; },
+    setRoll: (gate, take) => { rollGate = gate; rollTake = take; },
+    setRoastShare: (fn) => { roastShare = fn; },
+    setPhotoNote: (fn) => { photoNote = fn; },
+    cfg: () => roomCfg, markDirty: () => { dirty = true; }, ROASTS, RESULTS,
+  };
+  function loadMulti() { if (!roomMod) roomMod = import('./multi.js').then((m) => { m.init(api); return m; }); return roomMod; }
+  function openRoom() {
+    if (!roomCfg) return;
+    Sound.unlock(); closeSheet();
+    loadMulti().then((m) => m.openPanel(), (e) => { roomMod = null; if (DEBUG) console.warn('room: ' + e.message); toast('', 'いまは部屋につながりません', 'ひとりの焚き火で待っていてください', 3600); });
+  }
+  // 設定値（firebase-config.js）があるときだけ、入口を出す。これは同じ場所にある小さなファイルで、Firebase との通信ではない
+  import('./firebase-config.js').then((m) => {
+    const c = m && m.default;
+    if (c && c.apiKey && c.databaseURL && c.projectId && c.appId) { roomCfg = c; if (sheetTab === 'set' && app.classList.contains('sheet') && !recView) renderSet(); }
+  }).catch(() => { /* 無ければ、部屋の入口を出さないだけ */ });
+  { // 入口その1: 下の「空」ボタンの長押し
+    const b = $('btnSky'); let lp = 0, fired = false;
+    b.addEventListener('pointerdown', () => { fired = false; clearTimeout(lp); if (roomCfg) lp = setTimeout(() => { fired = true; haptic(15, true); openRoom(); }, 650); });
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, () => clearTimeout(lp));
+    b.addEventListener('click', (e) => { if (fired) { fired = false; e.stopImmediatePropagation(); } }, true);
+  }
+  SET_ROWS.unshift(({ row }) => { if (roomCfg) row('部屋（だれかと囲む）', mini(fx.room ? '部屋のようす' : 'ひらく', openRoom)); }); // 入口その2
+  STATS.push((stat) => { if (S.room.logs) stat('部屋でくべた薪', `${S.room.logs.toLocaleString('ja-JP')}本`); });
+  const roomSeen = () => !!roomCfg || Object.keys(S.room.col).length > 0;
+  BOOK_PAGES.push({ id: 'room', label: '囲む火', show: roomSeen, render: (pane) => cardPage(pane, 'room', '囲む火', MEV.map(([id, name, star, glyph, desc, hint]) => ({
+    id, name, glyph, css: orbOf([255, 150 - star * 20, 60 + star * 30]), rec: S.room.col[id], desc, hint, stars: '★'.repeat(star),
+  })), '回') });
+  ROAST_CARDS.push(() => (roomSeen() ? Object.keys(ROASTS).flatMap((id) => Object.keys(RESULTS).map((res) => ({
+    id: 'gift-' + id + '-' + res, name: 'もらった' + RESULTS[res][0] + ROASTS[id].name, glyph: '贈', css: orbOf(roastColor(id, { raw: 0.2, good: 0.75, perfect: 0.86, burnt: 1.2 }[res])),
+    rec: S.roast['gift-' + id + '-' + res], desc: '部屋で、だれかが おすそわけ してくれた。', hint: '部屋で、だれかから おすそわけ をもらうと…。',
+  }))) : []));
+  HOWTO.push([() => !!roomCfg, '部屋：「空」ボタンを長押しすると、同じ合言葉の人と最大5人で1つの火を囲めます。名前や言葉は送られません。']);
+
   // ================= 起動 =================
   let lastT = 0, halted = false;
   function frame(ts) {
@@ -2960,7 +3063,7 @@
     if (awaySec > 120) toast('', 'おかえりなさい', S.fuel < 5 ? '熾火が、まだ赤く残っています' : '火はまだ燃えています', 3600);
   }
   if (DEBUG) { // ?debug を付けると演出をコンソールから試せる（記録には残らない）
-    window.takibi = { moon: (v) => { moonForce = v == null ? null : clamp(v, 0, 0.9999); moonRefresh(); paintMoon(); return moonName(); }, moonAt: (t) => { const d = (t - Date.UTC(2000, 0, 6, 18, 14)) / 86400000 / SYNODIC; return d - Math.floor(d); }, fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, ids: [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))], state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, endVisit: () => { if (fx.visitor) fx.visitor.age = Math.max(fx.visitor.age, fx.visitor.stay + 0.01); }, pick: pickRare,
+    window.takibi = { room: { fake: (n) => loadMulti().then((m) => m.fake(n)), leave: () => loadMulti().then((m) => m.leave()), state: () => (roomMod ? roomMod.then((m) => m.debugState()) : null), api }, moon: (v) => { moonForce = v == null ? null : clamp(v, 0, 0.9999); moonRefresh(); paintMoon(); return moonName(); }, moonAt: (t) => { const d = (t - Date.UTC(2000, 0, 6, 18, 14)) / 86400000 / SYNODIC; return d - Math.floor(d); }, fx: (id) => (FX[id] ? FX[id]() : trigger(id, false)), fuel: (n) => { S.fuel = clamp(n, 0, 100); }, sky: setSky, get ids() { return [...new Set(RARES.map((r) => r.id).concat(Object.keys(FX)))]; }, state: () => S, ember: (n) => { S.ember = clamp(n, 0, 100); }, endVisit: () => { if (fx.visitor) fx.visitor.age = Math.max(fx.visitor.age, fx.visitor.stay + 0.01); }, pick: pickRare,
       skip: (min) => { const sec = clamp(min * 60, 0, 30 * 86400), f0 = S.fuel; clockSkew += min * 60000; decayAway(sec); run('back', sec, f0); }, // 時計を進める（その間アプリを閉じていたものとして扱う）
       counts: () => ({ fps: Math.round(perf.fps), quality: Q(),
         canvases: (() => { const cs = [layerN, layerD, fBuf && fBuf.c, sBuf && sBuf.c, moonCv, mw.cv, sp.cvN, sp.cvD].concat(Object.values(wxs.layers)).filter(Boolean); return { n: cs.length, screens: +(cs.reduce((a, c) => a + c.width * c.height, 0) / (cv.width * cv.height)).toFixed(2), added: +([mw.cv, sp.cvN, sp.cvD].filter(Boolean).reduce((a, c) => a + c.width * c.height, 0) / (cv.width * cv.height)).toFixed(2), sprites: spriteCache.size }; })(),
