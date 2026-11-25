@@ -63,18 +63,20 @@ async function firebaseNet(cfg, emu) {
     now: () => Date.now() + offset,
     async join(roomId, mark) { // 空いている席（または90秒更新のない席）を1つ、トランザクションで取る
       room = roomId;
+      let denied = 0;
       for (let i = 0; i < SEATS; i++) {
         const r = fdb.ref(db, `rooms/${room}/seats/${i}`);
         let res = null;
         try {
           res = await fdb.runTransaction(r, (cur) => (cur === null || cur.uid === uid || cur.t < net.now() - STALE ? { uid, t: fdb.serverTimestamp(), mark, sit: i } : undefined), { applyLocally: false });
-        } catch (e) { res = null; } // その席は、もうだれかのもの
+        } catch (e) { res = null; denied++; } // 書けなかった（ほぼ同時にだれかが取った、またはルールが未設定）
         if (res && res.committed) {
           seat = i; seatRef = r;
           await fdb.onDisconnect(r).remove(); // 接続が切れたら席を空ける
           return i;
         }
       }
+      if (denied === SEATS) throw new Error('denied'); // どの席にも書けない = いっぱいなのではなく、つながっていない
       return -1;
     },
     watch(onSeats, onFire, onBc) {
