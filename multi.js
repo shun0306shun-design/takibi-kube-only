@@ -153,7 +153,7 @@ const R = {
   feedT: [0, 0, 0, 0, 0], simAt: 0, simLast: 0, starUntil: 0, starT0: 0, starDone: false, starTaps: [0, 0, 0, 0, 0], iTapped: false,
   ringLast: -1e9, talk: 0, ghosts: [], gestAt: 0, giftAt: -1e9, roast: null, wx: null, hideT: 0, rejoining: false,
 };
-const live = (s, now) => !!s && now - s.t < STALE + 5000;
+const live = (s, now) => !!s && now - s.t < STALE; // 90秒更新のない席は、いないものとして扱う
 const capNow = () => 100 + 5 * (R.people - 1);                 // 火力の最大は人数で少し上がる（2人=105 … 5人=120）
 const feverSec = () => 40 - 3.75 * (R.people - 1);              // 業火のゲージ: 1人=40秒、5人=25秒で満タン
 const blank = () => ({ fuel: 0, t: 0, total: 0, fever: 0, ftime: 0, last: 0 });
