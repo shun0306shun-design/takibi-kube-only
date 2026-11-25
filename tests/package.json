@@ -1,0 +1,14 @@
+{
+  "name": "takibi-kube-rules-tests",
+  "private": true,
+  "type": "module",
+  "description": "Security Rules のテスト。ゲーム本体の配信物には含めない（依存はこのフォルダの中だけ）",
+  "scripts": {
+    "test": "firebase emulators:exec --only database,auth --project demo-takibi \"node --test rules.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
+    "firebase": "13.4.0",
+    "firebase-tools": "15.37.0"
+  }
+}

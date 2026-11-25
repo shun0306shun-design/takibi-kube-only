@@ -1,0 +1,97 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      "$room": {
+        ".validate": "$room.matches(/^[0-9a-f]{32}$/)",
+        "seats": {
+          ".read": "auth != null",
+          "$seat": {
+            ".write": "auth != null && $seat.matches(/^[0-4]$/) && (!data.exists() || data.child('uid').val() === auth.uid || data.child('t').val() < now - 90000) && (!newData.exists() || newData.child('uid').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['uid', 't', 'mark', 'sit'])",
+            "uid": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "t": {
+              ".validate": "newData.val() === now"
+            },
+            "mark": {
+              ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 7"
+            },
+            "sit": {
+              ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 4"
+            },
+            "ev": {
+              ".validate": "newData.hasChildren(['k', 'n', 't'])",
+              "k": {
+                ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 15"
+              },
+              "n": {
+                ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 1 && newData.val() <= 20"
+              },
+              "t": {
+                ".validate": "newData.val() === now"
+              },
+              "$other": {
+                ".validate": false
+              }
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "fire": {
+          ".read": "auth != null",
+          ".write": "auth != null && newData.exists() && (root.child('rooms').child($room).child('seats').child('0').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('1').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('2').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('3').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('4').child('uid').val() === auth.uid)",
+          ".validate": "newData.hasChildren(['fuel', 't', 'total', 'fever', 'ftime', 'last'])",
+          "fuel": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 120"
+          },
+          "t": {
+            ".validate": "newData.val() === now"
+          },
+          "total": {
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= (data.exists() ? data.val() : 0) && newData.val() <= (data.exists() ? data.val() : 0) + 20"
+          },
+          "fever": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1"
+          },
+          "ftime": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now"
+          },
+          "last": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= now"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "bc": {
+          ".read": "auth != null",
+          ".write": "auth != null && newData.exists() && (root.child('rooms').child($room).child('seats').child('0').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('1').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('2').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('3').child('uid').val() === auth.uid || root.child('rooms').child($room).child('seats').child('4').child('uid').val() === auth.uid)",
+          ".validate": "newData.hasChildren(['k', 'a', 't', 'by'])",
+          "k": {
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 31"
+          },
+          "a": {
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 255"
+          },
+          "t": {
+            ".validate": "newData.val() === now"
+          },
+          "by": {
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 4 && root.child('rooms').child($room).child('seats').child('' + newData.val()).child('uid').val() === auth.uid"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}
