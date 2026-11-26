@@ -2994,7 +2994,7 @@
     setPhotoNote: (fn) => { photoNote = fn; },
     cfg: () => roomCfg, markDirty: () => { dirty = true; }, ROASTS, RESULTS,
   };
-  function loadMulti() { if (!roomMod) roomMod = import('./multi.js').then((m) => { m.init(api); return m; }); return roomMod; }
+  function loadMulti() { if (!roomMod) roomMod = import('./multi.js?v=3').then((m) => { m.init(api); return m; }); return roomMod; }
   function openRoom() {
     if (!roomCfg) return;
     Sound.unlock(); closeSheet();
