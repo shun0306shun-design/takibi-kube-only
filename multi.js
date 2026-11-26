@@ -37,6 +37,8 @@ const pickOf = (arr) => { const u = new Uint32Array(1); crypto.getRandomValues(u
 export const suggest = () => pickOf(W1) + pickOf(W2) + pickOf(W3);
 // 正規化: NFKC、前後の空白の削除、カタカナ → ひらがな、英字 → 小文字
 export const normalize = (s) => String(s).normalize('NFKC').trim().replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)).toLowerCase();
+// 呼び名（その部屋かぎり・6文字まで・入れなくてもよい）。制御文字と空白を除き、6文字に切る。画面には文字としてだけ出す
+export const cleanNick = (s) => { let out = ''; for (const ch of String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\ufeff\s]/g, '')) { if (out.length + ch.length > 6) break; out += ch; } return out; };
 export const validPass = (norm) => /^[ぁ-ゖー0-9a-z]{4,24}$/.test(norm);
 export async function roomIdOf(norm) { // 合言葉そのものは送らない。SHA-256 の先頭32文字だけが部屋のIDになる
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('takibi-room:' + norm));
@@ -62,23 +64,34 @@ async function firebaseNet(cfg, emu) {
   const net = {
     uid, kind: 'firebase',
     now: () => Date.now() + offset,
-    async join(roomId, mark) { // 空いている席（または90秒更新のない席）を1つ、トランザクションで取る
+    async join(roomId, mark, name) { // 空いている席（または90秒更新のない席）を1つ、トランザクションで取る
       room = roomId;
-      let denied = 0;
-      for (let i = 0; i < SEATS; i++) {
-        const r = fdb.ref(db, `rooms/${room}/seats/${i}`);
-        let res = null;
-        try {
-          res = await fdb.runTransaction(r, (cur) => (cur === null || cur.uid === uid || cur.t < net.now() - STALE ? { uid, t: fdb.serverTimestamp(), mark, sit: i } : undefined), { applyLocally: false });
-        } catch (e) { res = null; denied++; } // 書けなかった（ほぼ同時にだれかが取った、またはルールが未設定）
-        if (res && res.committed) {
-          seat = i; seatRef = r;
-          await fdb.onDisconnect(r).remove(); // 接続が切れたら席を空ける
-          return i;
+      const tryAll = async (withName) => {
+        let denied = 0;
+        for (let i = 0; i < SEATS; i++) {
+          const r = fdb.ref(db, `rooms/${room}/seats/${i}`);
+          let res = null;
+          try {
+            res = await fdb.runTransaction(r, (cur) => {
+              if (!(cur === null || cur.uid === uid || cur.t < net.now() - STALE)) return undefined;
+              const v = { uid, t: fdb.serverTimestamp(), mark, sit: i };
+              if (withName) v.name = name;
+              return v;
+            }, { applyLocally: false });
+          } catch (e) { res = null; denied++; } // 書けなかった（ほぼ同時にだれかが取った、またはルールが合わない）
+          if (res && res.committed) {
+            seat = i; seatRef = r;
+            await fdb.onDisconnect(r).remove(); // 接続が切れたら席を空ける
+            return i;
+          }
         }
-      }
-      if (denied === SEATS) throw new Error('denied'); // どの席にも書けない = いっぱいなのではなく、つながっていない
-      return -1;
+        return denied === SEATS ? -2 : -1;
+      };
+      let got = await tryAll(!!name);
+      net.noName = false;
+      if (got === -2 && name) { got = await tryAll(false); net.noName = got >= 0; } // 古いルールのままのプロジェクトでは、呼び名なしで入る
+      if (got === -2) throw new Error('denied'); // どの席にも書けない = いっぱいなのではなく、つながっていない
+      return got;
     },
     watch(onSeats, onFire, onBc) {
       offs.push(fdb.onValue(fdb.ref(db, `rooms/${room}/seats`), (s) => onSeats(s.val()), () => onSeats(null, true)));
@@ -108,9 +121,9 @@ function fakeNet(bots) {
   const push = () => { if (st.cb) { st.cb[0](st.seats.map((s) => (s ? { ...s, ev: s.ev ? { ...s.ev } : undefined } : null))); st.cb[1](st.fire ? { ...st.fire } : null); } };
   const net = {
     uid: 'me', kind: 'fake', now: () => Date.now(),
-    async join(roomId, mark) {
-      st.seats[0] = { uid: 'me', t: Date.now(), mark, sit: 0 };
-      for (let i = 1; i <= Math.min(4, bots); i++) st.seats[i] = { uid: 'bot' + i, t: Date.now(), mark: (mark + i * 3) % 8, sit: i, bot: { next: 3 + Math.random() * 4, gest: 8 + Math.random() * 20 } };
+    async join(roomId, mark, name) {
+      st.seats[0] = { uid: 'me', t: Date.now(), mark, sit: 0, name: name || undefined };
+      for (let i = 1; i <= Math.min(4, bots); i++) st.seats[i] = { uid: 'bot' + i, t: Date.now(), mark: (mark + i * 3) % 8, sit: i, name: ['', 'きつね', 'たぬき', '', 'ふくろう'][i] || undefined, bot: { next: 3 + Math.random() * 4, gest: 8 + Math.random() * 20 } };
       return 0;
     },
     watch(onSeats, onFire, onBc) { st.cb = [onSeats, onFire, onBc]; push(); onBc(null); },
@@ -156,7 +169,8 @@ function fakeNet(bots) {
 const R = {
   on: false, net: null, id: '', pass: '', seat: -1, ready: false, offline: false,
   seats: [null, null, null, null, null], evSeen: [0, 0, 0, 0, 0],
-  sh: Array.from({ length: SEATS }, () => ({ on: false, k: 0, mark: 0, gest: 0, gt: 0 })), // 席の影
+  sh: Array.from({ length: SEATS }, () => ({ on: false, k: 0, mark: 0, gest: 0, gt: 0, name: '' })), // 席の影
+  nick: '',
   fire: null, fireReady: false, queue: 0, evQueue: 0, fill: false, tokens: 5, lastFire: 0, lastEv: 0, txBusy: false,
   people: 1, keeper: false, beatAt: 0, ftimeSeen: 0, lastBc: null,
   feedT: [0, 0, 0, 0, 0], simAt: 0, simLast: 0, starUntil: 0, starT0: 0, starDone: false, starTaps: [0, 0, 0, 0, 0], iTapped: false,
@@ -210,7 +224,8 @@ async function enter(pass) {
     const id = await roomIdOf(norm);
     const emu = A.DEBUG && /[?&]emu\b/.test(location.search);
     net = await withTimeout(firebaseNet(emu ? { apiKey: 'demo', projectId: 'demo-takibi', appId: 'demo', databaseURL: 'http://127.0.0.1:9000?ns=demo-takibi' } : A.cfg(), emu), 10000);
-    const seat = await withTimeout(net.join(id, A.S.room.mark), 10000);
+    R.nick = cleanNick(nickDraft);
+    const seat = await withTimeout(net.join(id, A.S.room.mark, R.nick), 10000);
     if (seat < 0) { net.leave(); panel('home'); panelMsg('この火は、いまいっぱいです（5人）'); return; }
     start(net, id, norm, seat);
   } catch (e) {
@@ -238,7 +253,7 @@ function start(net, id, pass, seat) {
   A.S.room.told = true; A.save();
   net.watch(onSeats, onFire, onBc);
   panel(null);
-  A.toast('', '部屋に入りました', '同じ火を、囲んでいます', 3200);
+  A.toast('', '部屋に入りました', net.noName ? 'この部屋では、まだ呼び名を使えません' : '同じ火を、囲んでいます', 3200);
   A.syncChips();
 }
 export async function leave(quiet) {
@@ -255,7 +270,7 @@ async function rejoin() { // 接続が切れて席が空いたあと、戻って
   R.rejoining = true;
   try {
     R.net.online();
-    const seat = await withTimeout(R.net.join(R.id, A.S.room.mark), 10000);
+    const seat = await withTimeout(R.net.join(R.id, A.S.room.mark, R.nick), 10000);
     if (seat < 0) { await leave(true); A.showNote('部屋', ['この火は、いまいっぱいです（5人）。', 'ひとりの焚き火にもどりました。'], { ms: 9000 }); return; }
     R.seat = seat; R.offline = false;
   } catch (e) { dbg(e && e.message); await leave(true); fail(); } finally { R.rejoining = false; }
@@ -269,11 +284,17 @@ function onSeats(v, err) {
   for (let i = 0; i < SEATS; i++) {
     const s = (v && v[i]) || null, sh = R.sh[i];
     R.seats[i] = s;
-    if (s) sh.mark = s.mark;
+    if (s) { sh.mark = s.mark; sh.name = cleanNick(s.name); }
     if (i === R.seat) { sh.on = true; continue; }
     const here = live(s, now);
-    if (here && !sh.on) { sh.on = true; if (R.ready) { A.addLogText('だれかが火のそばに座りました'); A.quietToast('だれかが火のそばに座りました', '', 3000); A.Sound.tone(520, 620, 0.25, 0.05); } }
-    else if (!here && sh.on) { sh.on = false; if (R.ready) A.addLogText('だれかが席を立ちました'); }
+    if (here && !sh.on) { // 入室の知らせ
+      sh.on = true;
+      if (R.ready) { const t = `${who(i)}が火のそばに座りました`; A.addLogText(t); A.toast('', t, `${R.people + 1}人で囲んでいます`, 3400); A.Sound.tone(520, 620, 0.25, 0.05); A.haptic(12); }
+    } else if (!here && sh.on) { // 退室の知らせ
+      sh.on = false;
+      if (R.ready) { const t = `${who(i)}が席を立ちました`; A.addLogText(t); A.toast('', t, `${Math.max(1, R.people - 1)}人で囲んでいます`, 3400); A.Sound.tone(620, 440, 0.3, 0.04); }
+      if (!s) sh.name = '';
+    }
     if (s && s.ev && s.ev.t !== R.evSeen[i]) { // ほかの人の動き
       const fresh = R.ready && Math.abs(s.ev.t - R.evSeen[i]) > 400 && now - s.ev.t < 8000;
       R.evSeen[i] = s.ev.t;
@@ -307,7 +328,7 @@ function onEv(i, ev) {
     R.sh[i].gest = EV.GEST; R.sh[i].gt = performance.now();
     if (to === R.seat && item && res) { // おすそわけが届いた（焼き加減もそのまま、図鑑「あぶり」に「もらった○○」として残る）
       A.roastRecord(item, res, true);
-      A.toast('', 'おすそわけが届きました', 'もらった' + A.RESULTS[res][0] + A.ROASTS[item].name, 4600);
+      A.toast('', `${who(i)}から、おすそわけが届きました`, 'もらった' + A.RESULTS[res][0] + A.ROASTS[item].name, 4600);
       A.feel.chime(2); A.haptic([20, 40, 20]);
     }
   } else if (k === EV.STAR) { R.starTaps[i] = ev.t; sameStar(); }
@@ -441,7 +462,7 @@ function roastMenu() {
   if (!R.roast || !R.on) { roastSelf(); return; }
   A.openChipMenu([['自分で食べる', roastSelf, 'chipEat'], ['おすそわけ', () => {
     const now = R.net.now(), items = [];
-    for (let i = 0; i < SEATS; i++) if (i !== R.seat && live(R.seats[i], now)) items.push([`${MARK_NAMES[R.sh[i].mark]}の灯りの人へ`, () => roastGive(i), 'chipGive' + i]);
+    for (let i = 0; i < SEATS; i++) if (i !== R.seat && live(R.seats[i], now)) items.push([R.sh[i].name ? `${R.sh[i].name}へ` : `${MARK_NAMES[R.sh[i].mark]}の灯りの人へ`, () => roastGive(i), 'chipGive' + i]);
     items.push(['やめる', roastSelf]);
     A.openChipMenu(items);
   }, 'chipShare']]);
@@ -465,6 +486,7 @@ function gesture(k) { // 3秒に1回まで。送るのは番号だけ
 // ================= にぎやかな要素（言葉なしで盛り上がる） =================
 // どれも、すでに送っている「くべた」「しぐさ」の番号と時刻から、それぞれの端末が同じように読み取る。新しく送るのは「せーの」の番号だけ
 const colorOf = (i) => MARKS[R.sh[i].mark] || MARKS[0];
+const who = (i) => R.sh[i].name || 'だれか'; // 呼び名を入れていない人は「だれか」
 function burstOf(i, n, up) { // その人の灯りの色の火の粉
   const g = A.geo(), col = colorOf(i);
   for (let j = 0; j < n; j++) A.addSpark(g.cx + A.rnd(-22, 22) * g.U, g.baseY - A.rnd(10, 40) * g.U, A.rnd(-50, 50) * g.U, -A.rnd(120, 260) * g.U * up, A.rnd(1, 2.2), A.rnd(1.6, 2.6) * g.U, col, -18);
@@ -492,7 +514,7 @@ function cueStart(t, by) {
   const lead = Math.max(0, (t - now) / 1000);
   for (let j = 0; j < 3; j++) A.Sound.tone(660, 660, 0.09, 0.07, lead + j);
   A.Sound.tone(990, 990, 0.3, 0.09, lead + 3);
-  A.toast('', 'せーの', '火元が光った瞬間に、くべる', 2600);
+  A.toast('', by === R.seat ? 'せーの' : `${who(by)}の「せーの」`, '火元が光った瞬間に、くべる', 2600);
 }
 function seeno() { // 8秒に1回まで
   const at = performance.now();
@@ -583,13 +605,20 @@ function drawSeat(i, g, c) {
   c.fillStyle = '#2a2622'; c.fillRect(lx - 2.6, -8.4, 5.2, 1.6); c.fillRect(lx - 2.2, -0.6, 4.4, 1.4);
   c.fillStyle = A.rgb(col); c.fillRect(lx - 1.9, -6.8, 3.8, 6.2);
   c.restore();
+  if (sh.name && !A.app.classList.contains('photo')) { // 呼び名（写真には入れない）。文字としてだけ描く
+    c.save();
+    c.globalAlpha = Math.min(1, k * 1.4) * 0.9; c.font = `${Math.round(10 * g.U)}px "Hiragino Mincho ProN", "Yu Mincho", YuMincho, "Noto Serif JP", serif`; c.textAlign = 'center'; c.textBaseline = 'top';
+    c.shadowColor = 'rgba(0,0,0,.9)'; c.shadowBlur = 4; c.fillStyle = '#fff0d6';
+    c.fillText(sh.name, p.x, i === R.seat ? p.y - 46 * u : p.y + 8 * u); // 自分の呼び名は頭の上（下のボタンに隠れないように）
+    c.restore();
+  }
   c.globalCompositeOperation = 'lighter';
   A.blob(col, p.x + lx * u, p.y - 2 * u, 13 * u, 0.42 * k * (g.night ? 1 : 0.5));
   c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
 }
 
 // ================= 画面（入口のカード・人数の点） =================
-let elPanel = null, elDots = null, elAite = null, view = null, draft = '', msgText = '';
+let elPanel = null, elDots = null, elAite = null, view = null, draft = '', msgText = '', nickDraft = '';
 const shareText = (pass) => `${location.origin}${location.pathname}\n合言葉：${pass}\n（合言葉を知っている人はだれでも入れます）`; // ゲームの URL と合言葉だけ
 function copy(text, done) {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => A.toast('', done, '', 1800), () => panelMsg('コピーできませんでした。合言葉を書き写してください'));
@@ -612,6 +641,12 @@ function panel(v, keep) {
     MARKS.forEach((c, i) => { const b = el('button', i === S.room.mark ? 'on' : ''); b.style.background = A.rgb(c); b.setAttribute('aria-label', MARK_NAMES[i] + 'の灯り'); b.addEventListener('click', () => { S.room.mark = i; A.save(); if (R.on) { R.sh[R.seat].mark = i; R.net.setMark(i).catch(() => {}); } panelRefresh(); }); d.appendChild(b); });
     text('灯りの色', 'cap'); p.appendChild(d);
   };
+  const nick = () => { // 呼び名: その部屋かぎり。保存しない
+    text('呼び名（6文字まで・入れなくてもかまいません）', 'cap');
+    const i = el('input'); i.type = 'text'; i.maxLength = 6; i.value = nickDraft; i.placeholder = '呼び名'; i.className = 'nick'; i.autocapitalize = 'off'; i.autocomplete = 'off'; i.spellcheck = false;
+    i.addEventListener('input', () => { nickDraft = i.value; });
+    p.appendChild(i);
+  };
   const input = () => { const i = el('input'); i.type = 'text'; i.maxLength = 24; i.value = draft; i.placeholder = '合言葉（4〜24文字）'; i.autocapitalize = 'off'; i.autocomplete = 'off'; i.spellcheck = false; i.addEventListener('input', () => { draft = i.value; }); p.appendChild(i); return i; };
   p.appendChild(el('b', '', '囲む火'));
   if (v === 'busy') { text('部屋につないでいます…'); return; }
@@ -624,9 +659,10 @@ function panel(v, keep) {
     return;
   }
   if (v === 'home') {
-    if (!S.room.told) text('同じ合言葉を入れた人と、最大5人で1つの火を囲めます。名前や言葉は送られません。送られるのは、くべた本数・しぐさ・灯りの色だけです。'); // はじめて使うときに1度だけ
+    if (!S.room.told) text('同じ合言葉を入れた人と、最大5人で1つの火を囲めます。会話はできません。送られるのは、くべた本数・しぐさ・灯りの色と、入れた場合は呼び名（6文字まで）だけです。'); // はじめて使うときに1度だけ
     else text('合言葉で、同じ火を囲みます。', 'cap');
     if (msgText) text(msgText, 'msg');
+    nick();
     if (S.room.last) p.appendChild(btn(`前回の部屋に入る（${S.room.last}）`, () => enter(S.room.last), 'main'));
     row(btn('部屋をつくる', () => { draft = suggest(); panel('make'); }), btn('合言葉で入る', () => { draft = ''; panel('join'); }));
     row(btn('とじる', () => panel(null)));
@@ -745,9 +781,10 @@ export function init(api) {
 export async function fake(n) { // 通信せずに、架空の仲間と囲む
   if (R.on) await leave(true);
   const net = fakeNet(A.clamp(n | 0, 0, 4));
-  start(net, '', '', await net.join('', A.S.room.mark));
+  R.nick = cleanNick(nickDraft);
+  start(net, '', '', await net.join('', A.S.room.mark, R.nick));
   return R.people;
 }
 export const debugState = () => ({ chain: R.chain.n, cue: !!R.cue, fest: R.fest.on, festK: R.fest.k, on: R.on, seat: R.seat, people: R.people, keeper: R.keeper, fuel: R.fuelNow, gauge: R.gaugeNow, queue: R.queue, total: R.fire ? R.fire.total : 0, offline: R.offline,
-  seats: R.seats.map((s) => (s ? { mark: s.mark, ev: s.ev ? s.ev.k : null } : null)), gest: R.sh.map((s) => s.gest), fever: A.fever.state.t, wx: R.wx, kind: R.net ? R.net.kind : null, id: R.id });
+  names: R.sh.map((s) => s.name), nick: R.nick, noName: R.net ? !!R.net.noName : false, seats: R.seats.map((s) => (s ? { mark: s.mark, ev: s.ev ? s.ev.k : null } : null)), gest: R.sh.map((s) => s.gest), fever: A.fever.state.t, wx: R.wx, kind: R.net ? R.net.kind : null, id: R.id });
 export const debugNet = () => R.net;

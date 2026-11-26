@@ -3025,7 +3025,7 @@
     id: 'gift-' + id + '-' + res, name: 'もらった' + RESULTS[res][0] + ROASTS[id].name, glyph: '贈', css: orbOf(roastColor(id, { raw: 0.2, good: 0.75, perfect: 0.86, burnt: 1.2 }[res])),
     rec: S.roast['gift-' + id + '-' + res], desc: '部屋で、だれかが おすそわけ してくれた。', hint: '部屋で、だれかから おすそわけ をもらうと…。',
   }))) : []));
-  HOWTO.push([() => !!roomCfg, '部屋：「空」ボタンを長押しすると、同じ合言葉の人と最大5人で1つの火を囲めます。名前や言葉は送られません。']);
+  HOWTO.push([() => !!roomCfg, '部屋：「空」ボタンを長押しすると、同じ合言葉の人と最大5人で1つの火を囲めます。会話はできません（送るのは本数・しぐさ・灯りの色と、入れた場合は6文字までの呼び名だけ）。']);
 
   // ================= 起動 =================
   let lastT = 0, halted = false;

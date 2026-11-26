@@ -85,9 +85,21 @@ test('席: 範囲外の値・足りない項目・知らない項目・文字列
   await assertFails(s({ uid: 'alice', t: TS, mark: 'red', sit: 2 }));
   await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 5 }));
   await assertFails(s({ uid: 'alice', t: TS, mark: 1 }));
-  await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: 'アリス' }));
   await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 2, msg: 'こんにちは' }));
   await assertSucceeds(s({ uid: 'alice', t: TS, mark: 7, sit: 2 }));
+});
+
+test('呼び名: 6文字までの文字列だけ。無くてもよい。他人の呼び名は書き換えられない', async () => {
+  const s = (v) => set(ref(dbOf('alice'), `rooms/${ROOM}/seats/2`), v);
+  await assertSucceeds(s({ uid: 'alice', t: TS, mark: 1, sit: 2 }));
+  await assertSucceeds(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: 'アリス' }));
+  await assertSucceeds(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: '123456' }));
+  await assertSucceeds(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: '' }));
+  await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: '1234567' }));
+  await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: 'ながいなまえです' }));
+  await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: 12 }));
+  await assertFails(s({ uid: 'alice', t: TS, mark: 1, sit: 2, name: { a: 'x' } }));
+  await assertFails(update(ref(dbOf('bob'), `rooms/${ROOM}/seats/2`), { name: 'わるもの' }));
 });
 
 test('席の ev: 番号と本数の範囲だけ。文字や知らない項目は送れない', async () => {

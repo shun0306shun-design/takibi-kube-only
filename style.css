@@ -362,6 +362,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   width: 100%; height: 48px; padding: 0 12px; margin: 2px 0 8px; border-radius: 12px; border: 1px solid var(--line); background: rgba(0, 0, 0, .35); color: var(--ink);
   font: inherit; font-size: 18px; letter-spacing: .1em; -webkit-user-select: text; user-select: text;
 }
+#room input.nick { height: 42px; font-size: 16px; width: 60%; }
 #room .btns { display: flex; gap: 8px; margin: 8px 0 0; }
 #room button { flex: 1; min-height: 44px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--line); background: transparent; font-size: 13px; letter-spacing: .06em; }
 #room > button { width: 100%; margin-top: 8px; }

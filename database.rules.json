@@ -22,6 +22,9 @@
             "sit": {
               ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && newData.val() <= 4"
             },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length <= 6"
+            },
             "ev": {
               ".validate": "newData.hasChildren(['k', 'n', 't'])",
               "k": {
