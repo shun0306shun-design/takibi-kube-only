@@ -9,6 +9,7 @@ export const EV = {
   GEST: 1,   // 1〜5 = しぐさ（手をかざす／うなずく／空を指さす／あくび／おじぎ）。n = 1
   GIFT: 6,   // 6〜9 = おすそわけ（k - 6 = 焼き加減の番号）。n = 1 + 相手の席 × 2 + 食べ物の番号
   STAR: 10,  // 流れ星をタップした。n = 1
+  SEENO: 11, // せーの（3秒後に、全員の画面で火元が光る）。n = 1
 };
 // bc = { k, a, t, by }  部屋の出来事。by = 送った人の席
 export const BC = {
@@ -130,6 +131,8 @@ function fakeNet(bots) {
         if (!st.seats[i]) continue;
         if (k === EV.FEED && Math.random() < 0.45) setTimeout(() => st.cb && net.botFeed(i, 1), 80 + Math.random() * 500);
         if (k === EV.STAR && Math.random() < 0.7) setTimeout(() => st.cb && net.botEv(i, EV.STAR, 1), 200 + Math.random() * 900);
+        if (k === EV.SEENO && Math.random() < 0.8) setTimeout(() => st.cb && net.botFeed(i, 1), 2800 + Math.random() * 700);          // せーの に合わせてくべる
+        if (k >= EV.GEST && k < EV.GEST + 5 && Math.random() < 0.75) setTimeout(() => st.cb && net.botEv(i, k, 1), 500 + Math.random() * 1900); // しぐさをまねる
       }
     },
     tick(dt) { // 自動でくべる・しぐさをする
@@ -138,7 +141,11 @@ function fakeNet(bots) {
         const s = st.seats[i]; if (!s) continue;
         const b = s.bot;
         if ((b.next -= dt) <= 0) { b.next = 2.5 + Math.random() * 7; if (fireAt(st.fire, Date.now()).fuel < capNow() - 12) net.botFeed(i, 1 + (Math.random() * 3 | 0)); }
-        if ((b.gest -= dt) <= 0) { b.gest = 14 + Math.random() * 30; net.botEv(i, EV.GEST + (Math.random() * 5 | 0), 1); }
+        if ((b.gest -= dt) <= 0) {
+          b.gest = 14 + Math.random() * 30;
+          if (Math.random() < 0.25) { net.botEv(i, EV.SEENO, 1); for (let j = 1; j < SEATS; j++) if (st.seats[j] && Math.random() < 0.8) setTimeout(() => st.cb && net.botFeed(j, 1), 2800 + Math.random() * 700); }
+          else net.botEv(i, EV.GEST + (Math.random() * 5 | 0), 1);
+        }
       }
     },
   };
@@ -154,6 +161,10 @@ const R = {
   people: 1, keeper: false, beatAt: 0, ftimeSeen: 0, lastBc: null,
   feedT: [0, 0, 0, 0, 0], simAt: 0, simLast: 0, starUntil: 0, starT0: 0, starDone: false, starTaps: [0, 0, 0, 0, 0], iTapped: false,
   ringLast: -1e9, talk: 0, ghosts: [], gestAt: 0, giftAt: -1e9, roast: null, wx: null, hideT: 0, rejoining: false,
+  chain: { n: 0, seat: -1, last: 0, shown: 0 },                       // 合いの手
+  cue: null, cueT: [0, 0, 0, 0, 0], seenoAt: -1e9,                    // せーの
+  gl: Array.from({ length: SEATS }, () => ({ k: 0, t: 0 })), maneAt: 0, hop: 0, // まねっこ
+  fest: { on: false, k: 0, count: 0 },                                // 業火の祭り
 };
 const live = (s, now) => !!s && now - s.t < STALE; // 90秒更新のない席は、いないものとして扱う
 const capNow = () => 100 + 5 * (R.people - 1);                 // 火力の最大は人数で少し上がる（2人=105 … 5人=120）
@@ -216,6 +227,8 @@ function start(net, id, pass, seat) {
   Object.assign(R, { on: true, net, id, pass, seat, ready: false, offline: false, fire: null, fireReady: false, queue: 0, evQueue: 0, fill: false, tokens: 5, people: 1, keeper: false,
     beatAt: performance.now() + BEAT, ftimeSeen: 0, lastBc: null, simAt: 0, starUntil: 0, talk: 0, ringLast: -1e9, roast: null, wx: null, rejoining: false });
   R.seats.fill(null); R.evSeen.fill(0); R.feedT.fill(0); R.starTaps.fill(0); R.ghosts.length = 0;
+  Object.assign(R.chain, { n: 0, seat: -1, last: 0, shown: 0 }); R.cue = null; R.cueT.fill(0); R.hop = 0; Object.assign(R.fest, { on: false, k: 0, count: 0 });
+  for (const q of R.gl) { q.k = 0; q.t = 0; }
   for (const s of R.sh) Object.assign(s, { on: false, k: 0, gest: 0 });
   A.roomMode(true);
   A.setRoll((on) => on !== 'amb' || R.keeper, shareRare);   // 燃えている間の抽選と訪問者は「火の番」（いちばん小さい席）の端末だけ
@@ -286,8 +299,9 @@ function countPeople() {
 }
 function onEv(i, ev) {
   const k = ev.k;
-  if (k === EV.FEED) { R.ghosts.push({ seat: i, n: Math.min(20, ev.n), at: 0 }); R.feedT[i] = ev.t; R.simAt = performance.now() + 700; }
-  else if (k >= EV.GEST && k < EV.GEST + 5) { R.sh[i].gest = k; R.sh[i].gt = performance.now(); }
+  if (k === EV.FEED) { R.ghosts.push({ seat: i, n: Math.min(20, ev.n), at: 0 }); R.feedT[i] = ev.t; R.simAt = performance.now() + 700; noteFeed(i, ev.t, Math.min(20, ev.n)); }
+  else if (k >= EV.GEST && k < EV.GEST + 5) { R.sh[i].gest = k; R.sh[i].gt = performance.now(); noteGest(i, k, ev.t); }
+  else if (k === EV.SEENO) cueStart(ev.t, i);
   else if (k >= EV.GIFT && k < EV.GIFT + 4) {
     const to = Math.floor((ev.n - 1) / 2), item = ITEMS[(ev.n - 1) % 2], res = RES[k - EV.GIFT];
     R.sh[i].gest = EV.GEST; R.sh[i].gt = performance.now();
@@ -342,7 +356,7 @@ function flush(at) { // 書き込みは平均で毎秒1回まで（くべた本�
   if (evDue && (!fireDue || R.lastEv <= R.lastFire)) { // 同時くべの判定のため、くべた時刻（サーバー時刻）を席に書く
     const n = Math.min(20, R.evQueue);
     R.evQueue = 0; R.lastEv = at; R.tokens--;
-    R.feedT[R.seat] = R.net.now(); R.simAt = at + 700;
+    R.feedT[R.seat] = R.net.now(); R.simAt = at + 700; noteFeed(R.seat, R.net.now(), n);
     R.net.sendEv(EV.FEED, n).catch((e) => dbg(e && e.message));
     return;
   }
@@ -444,8 +458,95 @@ function roastGive(to) {
 function gesture(k) { // 3秒に1回まで。送るのは番号だけ
   const at = performance.now();
   if (!R.on || at - R.gestAt < 3000) return;
-  R.gestAt = at; R.sh[R.seat].gest = EV.GEST + k; R.sh[R.seat].gt = at;
+  R.gestAt = at; R.sh[R.seat].gest = EV.GEST + k; R.sh[R.seat].gt = at; noteGest(R.seat, EV.GEST + k, R.net.now());
   R.net.sendEv(EV.GEST + k, 1).catch(() => {});
+}
+
+// ================= にぎやかな要素（言葉なしで盛り上がる） =================
+// どれも、すでに送っている「くべた」「しぐさ」の番号と時刻から、それぞれの端末が同じように読み取る。新しく送るのは「せーの」の番号だけ
+const colorOf = (i) => MARKS[R.sh[i].mark] || MARKS[0];
+function burstOf(i, n, up) { // その人の灯りの色の火の粉
+  const g = A.geo(), col = colorOf(i);
+  for (let j = 0; j < n; j++) A.addSpark(g.cx + A.rnd(-22, 22) * g.U, g.baseY - A.rnd(10, 40) * g.U, A.rnd(-50, 50) * g.U, -A.rnd(120, 260) * g.U * up, A.rnd(1, 2.2), A.rnd(1.6, 2.6) * g.U, col, -18);
+}
+// --- 1. 薪の合いの手: だれかがくべた直後に、別の人がくべると続く ---
+function noteFeed(i, t, n) {
+  if (i !== R.seat) { R.cueT[i] = t; if (R.fest.on) R.fest.count += n; }
+  const c = R.chain;
+  if (c.seat !== i) c.n = c.seat >= 0 && Math.abs(t - c.last) <= 1700 ? c.n + 1 : 1; // 通信の遅れを見込んで、幅は1.7秒
+  c.seat = i; c.last = t;
+  if (c.n < 2) return;
+  if (c.n > (A.S.room.best || 0)) { A.S.room.best = c.n; A.markDirty(); }
+  if (A.calm()) return; // しずか: 数えるだけ
+  burstOf(i, Math.min(14, 4 + c.n), 1);
+  const f = 392 * Math.pow(2, Math.min(c.n, 30) / 12); // 続くほど音程が上がる
+  A.Sound.tone(f, f, 0.16, 0.08, 0, 'triangle');
+  if ([5, 10, 20, 30].includes(c.n)) { for (let s = 0; s < SEATS; s++) if (R.sh[s].on) burstOf(s, 10, 1.3); A.feel.chime(c.n >= 20 ? 3 : 2); A.feel.bright(0.14); }
+}
+// --- 2. せーの: 3秒後に全員の画面で火元が光る。その瞬間にそろってくべると、人数ぶんの火柱 ---
+function cueStart(t, by) {
+  const now = R.net.now();
+  if (R.cue && now < R.cue.at + 2500) return; // 合図が重なったら、先のものだけ
+  R.cue = { at: t + 3000, by, flashed: false };
+  R.sh[by].gest = EV.GEST + 2; R.sh[by].gt = performance.now(); // 合図した人が、手を上げる
+  const lead = Math.max(0, (t - now) / 1000);
+  for (let j = 0; j < 3; j++) A.Sound.tone(660, 660, 0.09, 0.07, lead + j);
+  A.Sound.tone(990, 990, 0.3, 0.09, lead + 3);
+  A.toast('', 'せーの', '火元が光った瞬間に、くべる', 2600);
+}
+function seeno() { // 8秒に1回まで
+  const at = performance.now();
+  if (!R.on || at - R.seenoAt < 8000 || (R.cue && R.net.now() < R.cue.at + 2500)) return;
+  R.seenoAt = at;
+  cueStart(R.net.now(), R.seat);
+  R.net.sendEv(EV.SEENO, 1).catch(() => {});
+}
+function cueJudge() {
+  const cue = R.cue, now = R.net.now();
+  R.cue = null;
+  let n = 0, bits = 0;
+  for (let i = 0; i < SEATS; i++) if (R.cueT[i] >= cue.at - 800 && R.cueT[i] <= cue.at + 1200 && (i === R.seat || live(R.seats[i], now))) { n++; bits |= 1 << i; }
+  if (n < 2) { A.quietToast('そろわなかった', 'もういちど、せーの', 2600); return; } // 失敗しても、何も失わない
+  A.toast('', `せーの！ ${n}人そろった`, '', 3000);
+  A.feel.bright(0.12 + 0.05 * n);
+  if (A.calm()) return; // しずか: 光だけ
+  for (let i = 0; i < SEATS; i++) if (bits & (1 << i)) burstOf(i, 16, 1.7);
+  A.emberBurst(A.geo().cx, A.geo().baseY - 30 * A.geo().U, 10 * n, 1.5);
+  A.feel.chime(n >= 4 ? 3 : 2); if (n >= 4) A.feel.shake(2.5);
+  A.haptic([20, 30, 20, 30, 50]);
+}
+// --- 6. まねっこ: だれかのしぐさを、3秒以内に全員がまねると「そろった」 ---
+function noteGest(i, k, t) {
+  R.gl[i].k = k; R.gl[i].t = t;
+  const now = R.net.now();
+  let n = 0, lo = Infinity, hi = 0;
+  for (let s = 0; s < SEATS; s++) {
+    if (s !== R.seat && !live(R.seats[s], now)) continue;
+    n++;
+    if (R.gl[s].k !== k) return;
+    lo = Math.min(lo, R.gl[s].t); hi = Math.max(hi, R.gl[s].t);
+  }
+  if (n < 2 || hi - lo > 3000 || lo === R.maneAt) return;
+  R.maneAt = lo;
+  for (const q of R.gl) q.k = 0;
+  A.S.room.mane = (A.S.room.mane || 0) + 1; A.markDirty();
+  A.toast('', 'そろった', `みんなで「${GESTS[k - EV.GEST]}」`, 3000);
+  A.feel.bright(0.12);
+  if (A.calm()) return;
+  R.hop = 1.6; // 全員の影が小さく跳ねる
+  for (let s = 0; s < SEATS; s++) if (R.sh[s].on) { const p = seatPos(s, A.geo()), u = A.geo().U; for (let j = 0; j < 5; j++) A.addSpark(p.x + A.rnd(-8, 8) * u, p.y - 34 * u * p.s, A.rnd(-14, 14) * u, -A.rnd(20, 60) * u, A.rnd(0.6, 1.2), 1.8 * u, colorOf(s), 20); }
+  A.feel.chime(1);
+}
+// --- 7. 業火の祭り: みんなの業火の15秒は、全員の影が立ち上がり、くべるたびに自分の色の火の粉が噴き上がる ---
+function festTick(real) {
+  const f = R.fest, on = A.fever.state.t > 0 && R.people >= 2;
+  if (on && !f.on) { f.on = true; f.count = 0; }
+  else if (!on && f.on) { // 終わったら、部屋の合計だけを出す（順位は出さない）
+    f.on = false;
+    if (f.count > 0) A.toast('', '業火の祭り', `みんなで ${f.count}本 くべました`, 4400);
+  }
+  f.k = A.clamp(f.k + (f.on && !A.calm() ? real * 2 : -real * 1.5), 0, 1);
+  if (R.hop > 0) R.hop = Math.max(0, R.hop - real);
 }
 
 // ================= 席と影の絵 =================
@@ -461,7 +562,8 @@ function drawSeat(i, g, c) {
   const lit = g.lit * (0.5 + 0.5 * Math.min(1, g.I)), body = A.rgb(A.mix([14, 12, 16], [74, 44, 28], 0.3 * lit * (g.night ? 1 : 0.5) + (g.night ? 0 : 0.12)));
   c.save();
   c.globalAlpha = Math.min(1, k * 1.4);
-  c.translate(p.x, p.y + 2 * u); c.scale(u, u * (1 + 0.22 * (1 - k))); // 闇から現れて、ゆっくり腰を下ろす
+  const fk = R.fest.k, hop = R.hop > 0 ? Math.abs(Math.sin(R.hop * Math.PI * 2 + i)) * 5 * Math.min(1, R.hop) : 0; // 業火の祭りでは立ち上がる／そろうと小さく跳ねる
+  c.translate(p.x, p.y + 2 * u - hop * u); c.scale(u, u * (1 + 0.22 * (1 - k) + 0.24 * fk)); // 闇から現れて、ゆっくり腰を下ろす
   c.translate(0, -9 * (1 - k));
   c.fillStyle = body;
   c.beginPath(); c.ellipse(p.dir * 3, 0, 12, 4.6, 0, 0, Math.PI * 2); c.fill(); // ひざ
@@ -473,6 +575,7 @@ function drawSeat(i, g, c) {
   c.strokeStyle = body; c.lineWidth = 3.2; c.lineCap = 'round';
   if (ge === 1) { c.beginPath(); c.moveTo(p.dir * 4, -17); c.lineTo(p.dir * (4 + 13 * gk), -15 - 2 * gk); c.stroke(); }                 // 手をかざす
   if (ge === 3) { c.beginPath(); c.moveTo(p.dir * 4, -18); c.lineTo(p.dir * (4 + 7 * gk), -18 - 17 * gk); c.stroke(); }                 // 空を指さす
+  if (fk > 0.3 && !ge) { const w = Math.sin(at / 130 + i * 1.7) * 3 * fk; c.beginPath(); c.moveTo(-5, -18); c.lineTo(-10 - w, -30 * fk); c.moveTo(5, -18); c.lineTo(10 + w, -30 * fk); c.stroke(); } // 両手を上げる
   if (ge === 4) { c.beginPath(); c.moveTo(-5, -18); c.lineTo(-9 * gk - 3, -18 - 12 * gk); c.moveTo(5, -18); c.lineTo(9 * gk + 3, -18 - 12 * gk); c.stroke(); } // あくび
   c.restore();
   // 足もとの小さなランタン（その人の灯りの色）
@@ -486,7 +589,7 @@ function drawSeat(i, g, c) {
 }
 
 // ================= 画面（入口のカード・人数の点） =================
-let elPanel = null, elDots = null, view = null, draft = '', msgText = '';
+let elPanel = null, elDots = null, elAite = null, view = null, draft = '', msgText = '';
 const shareText = (pass) => `${location.origin}${location.pathname}\n合言葉：${pass}\n（合言葉を知っている人はだれでも入れます）`; // ゲームの URL と合言葉だけ
 function copy(text, done) {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => A.toast('', done, '', 1800), () => panelMsg('コピーできませんでした。合言葉を書き写してください'));
@@ -550,13 +653,17 @@ export function init(api) {
   const { HOOKS, TAP_GUARD, FX } = A;
   elPanel = A.app.appendChild(A.el('div')); elPanel.id = 'room';
   elDots = A.$('stage').insertAdjacentElement('afterend', A.el('div')); elDots.id = 'roomDots';
+  elAite = A.app.appendChild(A.el('div')); elAite.id = 'aite';
 
   HOOKS.thrown.push((L) => { // 自分の手でくべた薪: 本数はひとりのときと同じく数え、火力は部屋の火に足す
     if (!R.on || L.stew || L.ghost) return;
     L.fuel = 0; R.queue++; R.evQueue++;
     if (!A.fx.uncounted) { A.S.room.logs++; A.markDirty(); }
+    if (R.fest.on) R.fest.count++;
+    if (R.cue && Math.abs(R.net.now() - R.cue.at) < 1000) { R.cueT[R.seat] = R.net.now(); R.lastEv = 0; } // せーの の瞬間の薪は、待たずにすぐ送る
   });
   HOOKS.land.push((L) => { if (R.on && L.gold === true) R.fill = true; }); // 金の薪は、部屋の火も満タンにする
+  HOOKS.land.push((L) => { if (R.on && R.fest.on && !A.calm() && !L.ghost) burstOf(R.seat, 12, 1.5); }); // 祭りのあいだは、くべるたびにその人の色が噴き上がる
   HOOKS.update.push((dt, real) => {
     if (!R.on) return;
     const at = performance.now(), now = R.net.now(), g = A.geo();
@@ -576,9 +683,18 @@ export function init(api) {
       if (at < q.at) continue;
       const p = seatPos(q.seat, g);
       A.throwGhost(p.x + p.dir * 8 * g.U, p.y - 22 * g.U * p.s, MARKS[R.sh[q.seat].mark]);
+      if (R.fest.on && !A.calm()) burstOf(q.seat, 6, 1.4);
       q.at = at + 140; if (--q.n <= 0) R.ghosts.splice(i, 1);
     }
     if (R.roast && at > R.roast.until) roastSelf(); // 選ばなければ、自分で食べたことにする
+    festTick(real);
+    if (R.chain.n && now - R.chain.last > 2300) { R.chain.n = 0; R.chain.seat = -1; } // 合いの手が途切れた
+    const show = R.chain.n >= 2 && !A.calm() ? R.chain.n : 0;
+    if (show !== R.chain.shown) { R.chain.shown = show; if (show) { elAite.textContent = `合いの手 ${show}`; elAite.classList.remove('bump'); void elAite.offsetWidth; elAite.classList.add('on', 'bump'); } else elAite.classList.remove('on'); }
+    if (R.cue) { // せーの
+      if (!R.cue.flashed && now >= R.cue.at) { R.cue.flashed = true; A.feel.bright(0.2); A.emberBurst(g.cx, g.baseY - 20 * g.U, 8, 0.9); }
+      if (now >= R.cue.at + 1500) cueJudge();
+    }
   });
   HOOKS.sec.push(() => {
     if (!R.on) return;
@@ -591,6 +707,14 @@ export function init(api) {
   });
   HOOKS.ground.push(() => { if (!R.on && !R.sh.some((s) => s.k > 0.01)) return; const g = A.geo(), c = A.ctx(); for (let i = 0; i < SEATS; i++) if (i !== R.seat) drawSeat(i, g, c); });
   HOOKS.front.push(() => { if (R.on) drawSeat(R.seat, A.geo(), A.ctx()); });
+  HOOKS.front.push(() => { // せーの: 火元に向かって縮んでいく輪。光った瞬間が合図
+    if (!R.on || !R.cue) return;
+    const g = A.geo(), c = A.ctx(), left = (R.cue.at - R.net.now()) / 3000;
+    if (left < 0 || left > 1) return;
+    c.globalCompositeOperation = 'lighter'; c.globalAlpha = 0.25 + 0.6 * (1 - left); c.strokeStyle = A.rgb(colorOf(R.cue.by)); c.lineWidth = (2 + 2 * (1 - left)) * g.U;
+    c.beginPath(); c.ellipse(g.cx, g.baseY + 8 * g.U, (46 + 130 * left) * g.U, (13 + 36 * left) * g.U, 0, 0, Math.PI * 2); c.stroke();
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+  });
   TAP_GUARD.splice(1, 0, (e) => { // 流れ星が流れているあいだの、空へのタップ（同じ星）
     if (!R.on || R.iTapped || performance.now() > R.starUntil || !e || e.clientY == null) return false;
     const g = A.geo(), rect = A.app.getBoundingClientRect();
@@ -600,6 +724,7 @@ export function init(api) {
     R.net.sendEv(EV.STAR, 1).catch(() => {}); sameStar();
     return true;
   });
+  A.addChip('chipSeeno', 'せーの', seeno, () => R.on && R.people >= 2);
   A.addChip('chipGest', 'しぐさ', () => A.openChipMenu(GESTS.map((n, i) => [n, () => gesture(i), 'chipG' + i]).concat([['やめる', () => {}]])), () => R.on);
   A.addChip('chipLeave', '部屋を出る', () => leave(), () => R.on); // いつでも1タップで
   document.addEventListener('visibilitychange', () => { // アプリが裏に回って2分たったら切断し、戻ったら再接続する
@@ -610,6 +735,8 @@ export function init(api) {
   });
   window.addEventListener('pagehide', () => { if (R.on && R.net.kind !== 'fake') R.net.leave().catch(() => {}); });
   A.MEV.forEach((m, i) => { FX['m-' + m[0]] = () => multiEvent(i, 31, false); });
+  FX['room-seeno'] = () => { if (R.on) { R.seenoAt = -1e9; seeno(); } };
+  FX['room-fest'] = () => { if (R.on) { A.fever.start(); } };
   GESTS.forEach((n, i) => { FX['gest-' + (i + 1)] = () => { if (R.on) { R.gestAt = 0; gesture(i); } }; });
   A.syncChips();
 }
@@ -621,6 +748,6 @@ export async function fake(n) { // 通信せずに、架空の仲間と囲む
   start(net, '', '', await net.join('', A.S.room.mark));
   return R.people;
 }
-export const debugState = () => ({ on: R.on, seat: R.seat, people: R.people, keeper: R.keeper, fuel: R.fuelNow, gauge: R.gaugeNow, queue: R.queue, total: R.fire ? R.fire.total : 0, offline: R.offline,
+export const debugState = () => ({ chain: R.chain.n, cue: !!R.cue, fest: R.fest.on, festK: R.fest.k, on: R.on, seat: R.seat, people: R.people, keeper: R.keeper, fuel: R.fuelNow, gauge: R.gaugeNow, queue: R.queue, total: R.fire ? R.fire.total : 0, offline: R.offline,
   seats: R.seats.map((s) => (s ? { mark: s.mark, ev: s.ev ? s.ev.k : null } : null)), gest: R.sh.map((s) => s.gest), fever: A.fever.state.t, wx: R.wx, kind: R.net ? R.net.kind : null, id: R.id });
 export const debugNet = () => R.net;

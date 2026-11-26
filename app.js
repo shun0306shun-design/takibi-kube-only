@@ -2966,7 +2966,7 @@
   def('room', () => ({ last: '', logs: 0, col: {}, mark: 0, told: false })); // last = 最後に入った部屋の合言葉（この端末の中だけ）
   CHECK.room = (v) => {
     if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-    return { last: V.str(24)(v.last) || '', logs: V.count(v.logs) || 0, col: V.rec(() => MEV.map((m) => m[0]), V.nfirst)(v.col) || {}, mark: V.num(0, 7, true)(v.mark) || 0, told: v.told === true };
+    return { best: V.count(v.best) || 0, mane: V.count(v.mane) || 0, last: V.str(24)(v.last) || '', logs: V.count(v.logs) || 0, col: V.rec(() => MEV.map((m) => m[0]), V.nfirst)(v.col) || {}, mark: V.num(0, 7, true)(v.mark) || 0, told: v.told === true };
   };
   let roomCfg = null, roomMod = null, photoNote = null;
   function roomMode(on) { // ひとりの焚き火の状態は、入る前のまま取っておき、出たら戻す
@@ -3012,7 +3012,11 @@
     b.addEventListener('click', (e) => { if (fired) { fired = false; e.stopImmediatePropagation(); } }, true);
   }
   SET_ROWS.unshift(({ row }) => { if (roomCfg) row('部屋（だれかと囲む）', mini(fx.room ? '部屋のようす' : 'ひらく', openRoom)); }); // 入口その2
-  STATS.push((stat) => { if (S.room.logs) stat('部屋でくべた薪', `${S.room.logs.toLocaleString('ja-JP')}本`); });
+  STATS.push((stat) => {
+    if (S.room.logs) stat('部屋でくべた薪', `${S.room.logs.toLocaleString('ja-JP')}本`);
+    if (S.room.best) stat('合いの手の最長', `${S.room.best}`);
+    if (S.room.mane) stat('しぐさがそろった回数', `${S.room.mane}回`);
+  });
   const roomSeen = () => !!roomCfg || Object.keys(S.room.col).length > 0;
   BOOK_PAGES.push({ id: 'room', label: '囲む火', show: roomSeen, render: (pane) => cardPage(pane, 'room', '囲む火', MEV.map(([id, name, star, glyph, desc, hint]) => ({
     id, name, glyph, css: orbOf([255, 150 - star * 20, 60 + star * 30]), rec: S.room.col[id], desc, hint, stars: '★'.repeat(star),

@@ -374,7 +374,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #roomDots:empty { display: none; }
 #roomDots i { width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 6px currentColor; opacity: .9; }
 #roomDots i.me { outline: 1px solid rgba(255, 255, 255, .7); outline-offset: 1.5px; }
-#app.photo #roomDots, #app.photo #room { display: none; }
+#aite {
+  position: absolute; z-index: 2; left: 14px; top: 47%; font-size: 16px; letter-spacing: .1em; color: #ffe3bd;
+  text-shadow: 0 0 12px rgba(255, 150, 60, .8), 0 1px 3px #000; opacity: 0; transition: opacity .4s; pointer-events: none;
+}
+#aite.on { opacity: 1; }
+#aite.bump { animation: bump .22s ease-out; }
+#app.photo #roomDots, #app.photo #room, #app.photo #aite, #app.slim #aite { display: none; }
 #app.slim.inroom #chips:not(.menu) { display: flex; } /* すっきり表示でも、部屋の中では「しぐさ」「部屋を出る」を出す */
 
 /* ---- 横向きは非対応 ---- */
